@@ -1,7 +1,8 @@
-import { useState } from 'react';
+import { useState, useEffect } from 'react';
 import { Project, Task } from '../App';
 import { Plus, Search, Filter, Clock, AlertCircle, CheckCircle2, Edit2, Trash2 } from 'lucide-react';
 import { TaskModal } from './task-modal';
+import { taskAPI, TaskDto } from '../services/api-client';
 
 interface TaskManagementProps {
   project: Project;
@@ -10,6 +11,9 @@ interface TaskManagementProps {
 }
 
 export function TaskManagement({ project, isManager, onUpdateProject }: TaskManagementProps) {
+  const [tasks, setTasks] = useState<Task[]>([]);
+  const [loading, setLoading] = useState(false);
+  const [error, setError] = useState<string | null>(null);
   const [showTaskModal, setShowTaskModal] = useState(false);
   const [editingTask, setEditingTask] = useState<Task | null>(null);
   const [searchTerm, setSearchTerm] = useState('');
@@ -17,32 +21,107 @@ export function TaskManagement({ project, isManager, onUpdateProject }: TaskMana
   const [filterPriority, setFilterPriority] = useState<Task['priority'] | 'all'>('all');
   const [sortBy, setSortBy] = useState<'priority-high' | 'priority-low' | 'date-asc' | 'date-desc'>('date-desc');
 
-  const handleSaveTask = (task: Task) => {
-    let updatedTasks: Task[];
-    
-    if (editingTask) {
-      updatedTasks = project.tasks.map(t => t.id === task.id ? task : t);
-    } else {
-      updatedTasks = [...project.tasks, task];
+  // Fetch tasks from API
+  const fetchTasks = async () => {
+    try {
+      setLoading(true);
+      setError(null);
+      const projectId = parseInt(project.id);
+      const taskDtos = await taskAPI.getProjectTasks(projectId);
+      
+      // Convert TaskDto to Task
+      const convertedTasks: Task[] = taskDtos.map(dto => ({
+        id: dto.taskID?.toString() || '',
+        title: dto.taskName,
+        description: dto.description,
+        status: (dto.status as Task['status']) || 'todo',
+        assignee: dto.assignee,
+        requiredSkills: dto.requiredSkills || [],
+        startDate: dto.startDate,
+        endDate: dto.endDate,
+        estimatedDuration: dto.estimatedDuration || 0,
+        dependencies: (dto.dependencyIds || []).map(id => id.toString()),
+        priority: (dto.priority as Task['priority']) || 'medium',
+        sprintId: dto.sprintId?.toString(),
+        storyPoints: dto.storyPoints,
+      }));
+      
+      setTasks(convertedTasks);
+    } catch (err) {
+      const errorMessage = err instanceof Error ? err.message : 'Failed to fetch tasks';
+      setError(errorMessage);
+      console.error('Error fetching tasks:', err);
+    } finally {
+      setLoading(false);
     }
-
-    onUpdateProject({ ...project, tasks: updatedTasks });
-    setShowTaskModal(false);
-    setEditingTask(null);
   };
 
-  const handleDeleteTask = (taskId: string) => {
-    const updatedTasks = project.tasks.filter(t => t.id !== taskId);
-    
-    // Remove task from sprint if it was in one
-    const updatedSprints = project.sprints.map(sprint => ({
-      ...sprint,
-      taskIds: sprint.taskIds.filter(id => id !== taskId),
-    }));
+  // Load tasks when project changes
+  useEffect(() => {
+    fetchTasks();
+  }, [project.id]);
 
-    onUpdateProject({ ...project, tasks: updatedTasks, sprints: updatedSprints });
-    setShowTaskModal(false);
-    setEditingTask(null);
+  const handleSaveTask = async (task: Task) => {
+    try {
+      setLoading(true);
+      setError(null);
+      const projectId = parseInt(project.id);
+      const taskDto: TaskDto = {
+        taskID: task.id ? parseInt(task.id) : undefined,
+        projectID: projectId,
+        taskName: task.title,
+        description: task.description,
+        status: task.status,
+        priority: task.priority,
+        estimatedDuration: task.estimatedDuration,
+        assignee: task.assignee,
+        requiredSkills: task.requiredSkills,
+        startDate: task.startDate,
+        endDate: task.endDate,
+        dependencyIds: task.dependencies.map(id => parseInt(id)),
+        sprintId: task.sprintId ? parseInt(task.sprintId) : undefined,
+        storyPoints: task.storyPoints,
+      };
+
+      if (editingTask) {
+        // Update existing task
+        await taskAPI.updateTask(projectId, parseInt(task.id), taskDto);
+      } else {
+        // Create new task
+        await taskAPI.createTask(projectId, taskDto);
+      }
+
+      // Refresh task list
+      await fetchTasks();
+      setShowTaskModal(false);
+      setEditingTask(null);
+    } catch (err) {
+      const errorMessage = err instanceof Error ? err.message : 'Failed to save task';
+      setError(errorMessage);
+      console.error('Error saving task:', err);
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const handleDeleteTask = async (taskId: string) => {
+    try {
+      setLoading(true);
+      setError(null);
+      const projectId = parseInt(project.id);
+      await taskAPI.deleteTask(projectId, parseInt(taskId));
+      
+      // Refresh task list
+      await fetchTasks();
+      setShowTaskModal(false);
+      setEditingTask(null);
+    } catch (err) {
+      const errorMessage = err instanceof Error ? err.message : 'Failed to delete task';
+      setError(errorMessage);
+      console.error('Error deleting task:', err);
+    } finally {
+      setLoading(false);
+    }
   };
 
   const handleEditTask = (task: Task) => {
@@ -88,7 +167,7 @@ export function TaskManagement({ project, isManager, onUpdateProject }: TaskMana
   };
 
   // Filter tasks
-  const filteredTasks = project.tasks.filter(task => {
+  const filteredTasks = tasks.filter(task => {
     const matchesSearch = task.title.toLowerCase().includes(searchTerm.toLowerCase()) ||
                          task.description.toLowerCase().includes(searchTerm.toLowerCase());
     const matchesStatus = filterStatus === 'all' || task.status === filterStatus;
@@ -115,17 +194,27 @@ export function TaskManagement({ project, isManager, onUpdateProject }: TaskMana
 
   // Calculate statistics
   const stats = {
-    total: project.tasks.length,
-    todo: project.tasks.filter(t => t.status === 'todo').length,
-    inProgress: project.tasks.filter(t => t.status === 'in-progress').length,
-    review: project.tasks.filter(t => t.status === 'review').length,
-    done: project.tasks.filter(t => t.status === 'done').length,
-    inBacklog: project.tasks.filter(t => !t.sprintId).length,
-    inSprints: project.tasks.filter(t => t.sprintId).length,
+    total: tasks.length,
+    todo: tasks.filter(t => t.status === 'todo').length,
+    inProgress: tasks.filter(t => t.status === 'in-progress').length,
+    review: tasks.filter(t => t.status === 'review').length,
+    done: tasks.filter(t => t.status === 'done').length,
+    inBacklog: tasks.filter(t => !t.sprintId).length,
+    inSprints: tasks.filter(t => t.sprintId).length,
   };
 
   return (
     <div className="space-y-6">
+      {/* Error message */}
+      {error && (
+        <div className="bg-red-50 border border-red-200 rounded-lg p-4">
+          <div className="flex items-center gap-2">
+            <AlertCircle className="w-5 h-5 text-red-600" />
+            <p className="text-red-700">{error}</p>
+          </div>
+        </div>
+      )}
+
       {/* Header */}
       <div className="bg-white rounded-lg p-6 border border-gray-200">
         <div className="flex items-center justify-between mb-6">
@@ -141,10 +230,11 @@ export function TaskManagement({ project, isManager, onUpdateProject }: TaskMana
                 setEditingTask(null);
                 setShowTaskModal(true);
               }}
-              className="px-4 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700 transition-colors flex items-center gap-2"
+              disabled={loading}
+              className="px-4 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700 transition-colors flex items-center gap-2 disabled:bg-gray-400"
             >
               <Plus className="w-4 h-4" />
-              Register New Task
+              {loading ? 'Loading...' : 'Register New Task'}
             </button>
           )}
         </div>
@@ -241,7 +331,12 @@ export function TaskManagement({ project, isManager, onUpdateProject }: TaskMana
         </div>
         
         <div className="divide-y divide-gray-200">
-          {sortedTasks.length === 0 ? (
+          {loading && !tasks.length ? (
+            <div className="p-12 text-center">
+              <div className="inline-block animate-spin rounded-full h-8 w-8 border-b-2 border-blue-600 mb-3" />
+              <p className="text-gray-600">Loading tasks...</p>
+            </div>
+          ) : sortedTasks.length === 0 ? (
             <div className="p-12 text-center">
               <AlertCircle className="w-12 h-12 mx-auto mb-3 text-gray-400" />
               <p className="text-gray-600">
@@ -253,7 +348,7 @@ export function TaskManagement({ project, isManager, onUpdateProject }: TaskMana
           ) : (
             sortedTasks.map(task => {
               const hasDependencies = task.dependencies.length > 0;
-              const dependencyTasks = project.tasks.filter(t => task.dependencies.includes(t.id));
+              const dependencyTasks = tasks.filter(t => task.dependencies.includes(t.id));
               const blockedByIncompleteTasks = dependencyTasks.some(t => t.status !== 'done');
               const assignedMember = project.teamMembers.find(m => m.email === task.assignee);
               const sprint = project.sprints.find(s => s.id === task.sprintId);
@@ -282,10 +377,12 @@ export function TaskManagement({ project, isManager, onUpdateProject }: TaskMana
                       )}
 
                       <div className="flex flex-wrap items-center gap-4 text-sm text-gray-600">
-                        <span className="flex items-center gap-1">
-                          <Clock className="w-4 h-4" />
-                          {task.duration} days
-                        </span>
+                        {task.estimatedDuration !== undefined && task.estimatedDuration > 0 && (
+                          <span className="flex items-center gap-1">
+                            <Clock className="w-4 h-4" />
+                            {task.estimatedDuration} days
+                          </span>
+                        )}
 
                         {assignedMember && (
                           <span className="flex items-center gap-2">
@@ -348,7 +445,8 @@ export function TaskManagement({ project, isManager, onUpdateProject }: TaskMana
                       <div className="flex items-center gap-2 ml-4">
                         <button
                           onClick={() => handleEditTask(task)}
-                          className="p-2 hover:bg-gray-100 rounded-lg transition-colors"
+                          disabled={loading}
+                          className="p-2 hover:bg-gray-100 rounded-lg transition-colors disabled:opacity-50"
                           title="Edit task"
                         >
                           <Edit2 className="w-4 h-4 text-gray-600" />
@@ -359,7 +457,8 @@ export function TaskManagement({ project, isManager, onUpdateProject }: TaskMana
                               handleDeleteTask(task.id);
                             }
                           }}
-                          className="p-2 hover:bg-red-50 rounded-lg transition-colors"
+                          disabled={loading}
+                          className="p-2 hover:bg-red-50 rounded-lg transition-colors disabled:opacity-50"
                           title="Delete task"
                         >
                           <Trash2 className="w-4 h-4 text-red-600" />
@@ -377,7 +476,7 @@ export function TaskManagement({ project, isManager, onUpdateProject }: TaskMana
       {showTaskModal && (
         <TaskModal
           task={editingTask}
-          allTasks={project.tasks}
+          allTasks={tasks}
           project={project}
           isManager={isManager}
           onSave={handleSaveTask}

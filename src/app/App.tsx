@@ -38,7 +38,7 @@ export interface Task {
   requiredSkills: string[];
   startDate?: string;
   endDate?: string;
-  duration: number; // in days
+  estimatedDuration: number; // in days
   dependencies: string[]; // task IDs
   priority: 'low' | 'medium' | 'high';
   sprintId?: string; // Sprint assignment

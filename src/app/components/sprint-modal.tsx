@@ -6,10 +6,11 @@ interface SprintModalProps {
   sprint: Sprint | null;
   isManager: boolean;
   onSave: (sprint: Sprint) => void;
+  onDelete?: (sprintId: string) => void;
   onClose: () => void;
 }
 
-export function SprintModal({ sprint, isManager, onSave, onClose }: SprintModalProps) {
+export function SprintModal({ sprint, isManager, onSave, onDelete, onClose }: SprintModalProps) {
   const [formData, setFormData] = useState<Partial<Sprint>>({
     name: '',
     startDate: '',
@@ -140,23 +141,36 @@ export function SprintModal({ sprint, isManager, onSave, onClose }: SprintModalP
           </div>
 
           {/* Actions */}
-          <div className="flex items-center justify-end gap-2 mt-6 pt-6 border-t border-gray-200">
-            <button
-              type="button"
-              onClick={onClose}
-              className="px-4 py-2 text-gray-700 hover:bg-gray-100 rounded-lg transition-colors"
-            >
-              Cancel
-            </button>
-            {isManager && (
+          <div className="flex items-center justify-between gap-2 mt-6 pt-6 border-t border-gray-200">
+            <div>
+              {sprint && isManager && onDelete && (
+                <button
+                  type="button"
+                  onClick={() => onDelete(sprint.id)}
+                  className="px-4 py-2 bg-red-600 text-white rounded-lg hover:bg-red-700 transition-colors"
+                >
+                  Delete Sprint
+                </button>
+              )}
+            </div>
+            <div className="flex gap-2">
               <button
-                type="submit"
-                disabled={!formData.name || !formData.goal || !formData.startDate || !formData.endDate}
-                className="px-4 py-2 bg-purple-600 text-white rounded-lg hover:bg-purple-700 transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+                type="button"
+                onClick={onClose}
+                className="px-4 py-2 text-gray-700 hover:bg-gray-100 rounded-lg transition-colors"
               >
-                {sprint ? 'Save Changes' : 'Create Sprint'}
+                Cancel
               </button>
-            )}
+              {isManager && (
+                <button
+                  type="submit"
+                  disabled={!formData.name || !formData.goal || !formData.startDate || !formData.endDate}
+                  className="px-4 py-2 bg-purple-600 text-white rounded-lg hover:bg-purple-700 transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+                >
+                  {sprint ? 'Save Changes' : 'Create Sprint'}
+                </button>
+              )}
+            </div>
           </div>
         </form>
       </div>

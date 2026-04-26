@@ -3,6 +3,7 @@ import { Project, Task, Sprint, User } from '../App';
 import { Plus, GripVertical, Clock, AlertCircle, CheckCircle2, Calendar, Target, ChevronDown, Edit2, Search, SlidersHorizontal, X } from 'lucide-react';
 import { TaskModal } from './task-modal';
 import { SprintModal } from './sprint-modal';
+import { sprintAPI, taskAPI } from '../services/api-client';
 
 interface ScrumKanbanBoardProps {
   project: Project;
@@ -29,6 +30,7 @@ export function ScrumKanbanBoard({ project, currentUser, isManager, onUpdateProj
     return activeSprint || project.sprints[0] || null;
   });
   const [view, setView] = useState<'sprint' | 'backlog'>('sprint');
+  const [isLoading, setIsLoading] = useState(false);
 
   const handleDragStart = (task: Task) => {
     setDraggedTask(task);
@@ -38,7 +40,7 @@ export function ScrumKanbanBoard({ project, currentUser, isManager, onUpdateProj
     e.preventDefault();
   };
 
-  const handleDrop = (status: Task['status']) => {
+  const handleDrop = async (status: Task['status']) => {
     if (!draggedTask) return;
 
     // Permission check: team members can only update their own tasks
@@ -48,11 +50,44 @@ export function ScrumKanbanBoard({ project, currentUser, isManager, onUpdateProj
       return;
     }
 
-    const updatedTasks = project.tasks.map(task =>
-      task.id === draggedTask.id ? { ...task, status } : task
-    );
+    try {
+      setIsLoading(true);
+      // Update task status via API
+      const projectId = parseInt(project.id);
+      const taskId = parseInt(draggedTask.id);
+      
+      const updatedTaskData = {
+        taskID: taskId,
+        projectID: projectId,
+        taskName: draggedTask.title,
+        description: draggedTask.description,
+        status: status,
+        priority: draggedTask.priority,
+        estimatedDuration: draggedTask.estimatedDuration,
+        assignee: draggedTask.assignee,
+        requiredSkills: draggedTask.requiredSkills,
+        startDate: draggedTask.startDate,
+        endDate: draggedTask.endDate,
+        dependencyIds: draggedTask.dependencies.map(d => parseInt(d)),
+        sprintId: draggedTask.sprintId ? parseInt(draggedTask.sprintId) : undefined,
+        storyPoints: draggedTask.storyPoints,
+      };
 
-    onUpdateProject({ ...project, tasks: updatedTasks });
+      await taskAPI.updateTask(projectId, taskId, updatedTaskData);
+
+      // Update local state
+      const updatedTasks = project.tasks.map(task =>
+        task.id === draggedTask.id ? { ...task, status } : task
+      );
+
+      onUpdateProject({ ...project, tasks: updatedTasks });
+    } catch (error) {
+      console.error('Failed to update task status:', error);
+      alert('Failed to update task status. Please try again.');
+    } finally {
+      setIsLoading(false);
+    }
+    
     setDraggedTask(null);
   };
 
@@ -86,25 +121,49 @@ export function ScrumKanbanBoard({ project, currentUser, isManager, onUpdateProj
     setShowTaskModal(true);
   };
 
-  const handleSaveSprint = (sprint: Sprint) => {
-    let updatedSprints: Sprint[];
-    
-    if (editingSprint) {
-      updatedSprints = project.sprints.map(s => s.id === sprint.id ? sprint : s);
-      // If updating the selected sprint, update the selection too
-      if (selectedSprint?.id === sprint.id) {
+  const handleSaveSprint = async (sprint: Sprint) => {
+    try {
+      setIsLoading(true);
+      const projectId = parseInt(project.id);
+      
+      const sprintData = {
+        sprintName: sprint.name,
+        startDate: sprint.startDate,
+        endDate: sprint.endDate,
+        sprintGoal: sprint.goal,
+        sprintStatus: sprint.status,
+      };
+
+      let updatedSprints: Sprint[];
+
+      if (editingSprint) {
+        // Update existing sprint
+        const sprintId = parseInt(editingSprint.id);
+        await sprintAPI.updateSprint(sprintId, sprintData);
+        updatedSprints = project.sprints.map(s => s.id === sprint.id ? sprint : s);
+        
+        // If updating the selected sprint, update the selection too
+        if (selectedSprint?.id === sprint.id) {
+          setSelectedSprint(sprint);
+        }
+      } else {
+        // Create new sprint
+        await sprintAPI.createSprint(projectId, sprintData);
+        updatedSprints = [...project.sprints, sprint];
+      }
+
+      onUpdateProject({ ...project, sprints: updatedSprints });
+      setShowSprintModal(false);
+      setEditingSprint(null);
+
+      if (!selectedSprint) {
         setSelectedSprint(sprint);
       }
-    } else {
-      updatedSprints = [...project.sprints, sprint];
-    }
-
-    onUpdateProject({ ...project, sprints: updatedSprints });
-    setShowSprintModal(false);
-    setEditingSprint(null);
-    
-    if (!selectedSprint) {
-      setSelectedSprint(sprint);
+    } catch (error) {
+      console.error('Failed to save sprint:', error);
+      alert('Failed to save sprint. Please try again.');
+    } finally {
+      setIsLoading(false);
     }
   };
 
@@ -120,6 +179,42 @@ export function ScrumKanbanBoard({ project, currentUser, isManager, onUpdateProj
     );
 
     onUpdateProject({ ...project, tasks: updatedTasks, sprints: updatedSprints });
+  };
+
+  const handleDeleteSprint = async (sprintId: string) => {
+    if (!confirm('Are you sure you want to delete this sprint?')) {
+      return;
+    }
+
+    try {
+      setIsLoading(true);
+      const id = parseInt(sprintId);
+      
+      // Delete sprint via API
+      await sprintAPI.deleteSprint(id);
+
+      // Remove sprint from state
+      const updatedSprints = project.sprints.filter(s => s.id !== sprintId);
+      
+      // Move tasks from this sprint back to backlog
+      const updatedTasks = project.tasks.map(task =>
+        task.sprintId === sprintId ? { ...task, sprintId: undefined } : task
+      );
+
+      // If deleted sprint was selected, select another one
+      let newSelectedSprint = selectedSprint;
+      if (selectedSprint?.id === sprintId) {
+        newSelectedSprint = updatedSprints.length > 0 ? updatedSprints[0] : null;
+        setSelectedSprint(newSelectedSprint);
+      }
+
+      onUpdateProject({ ...project, sprints: updatedSprints, tasks: updatedTasks });
+    } catch (error) {
+      console.error('Failed to delete sprint:', error);
+      alert('Failed to delete sprint. Please try again.');
+    } finally {
+      setIsLoading(false);
+    }
   };
 
   const handleRemoveFromSprint = (taskId: string) => {
@@ -391,6 +486,7 @@ export function ScrumKanbanBoard({ project, currentUser, isManager, onUpdateProj
           sprint={editingSprint}
           isManager={isManager}
           onSave={handleSaveSprint}
+          onDelete={handleDeleteSprint}
           onClose={() => {
             setShowSprintModal(false);
             setEditingSprint(null);
@@ -496,10 +592,10 @@ function TaskCard({ task, allTasks, project, currentUser, isManager, onDragStart
             </span>
           )}
 
-          {task.duration && (
+          {task.estimatedDuration && (
             <span className="flex items-center gap-1 text-xs text-gray-600">
               <Clock className="w-3 h-3" />
-              {task.duration}d
+              {task.estimatedDuration}d
             </span>
           )}
 
@@ -808,7 +904,7 @@ function BacklogList({ tasks, project, currentUser, isManager, onEditTask, onAdd
                     <div className="flex flex-wrap items-center gap-4 text-sm text-gray-600">
                       <span className="flex items-center gap-1">
                         <Clock className="w-4 h-4" />
-                        {task.duration} days
+                        {task.estimatedDuration} days
                       </span>
 
                       {task.endDate && (

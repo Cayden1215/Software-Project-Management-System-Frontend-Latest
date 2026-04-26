@@ -2,6 +2,7 @@ import { useState } from 'react';
 import { Project, Task } from '../App';
 import { Plus, GripVertical, Clock, AlertCircle, CheckCircle2 } from 'lucide-react';
 import { TaskModal } from './task-modal';
+import { taskAPI } from '../services/api-client';
 
 interface KanbanBoardProps {
   project: Project;
@@ -29,14 +30,43 @@ export function KanbanBoard({ project, isManager, onUpdateProject }: KanbanBoard
     e.preventDefault();
   };
 
-  const handleDrop = (status: Task['status']) => {
+  const handleDrop = async (status: Task['status']) => {
     if (!draggedTask) return;
 
-    const updatedTasks = project.tasks.map(task =>
-      task.id === draggedTask.id ? { ...task, status } : task
-    );
+    try {
+      // Update task status via API
+      const projectId = parseInt(project.id);
+      const taskId = parseInt(draggedTask.id);
+      
+      const updatedTaskData = {
+        taskID: taskId,
+        projectID: projectId,
+        taskName: draggedTask.title,
+        description: draggedTask.description,
+        status: status,
+        priority: draggedTask.priority,
+        estimatedDuration: draggedTask.estimatedDuration,
+        assignee: draggedTask.assignee,
+        requiredSkills: draggedTask.requiredSkills,
+        startDate: draggedTask.startDate,
+        endDate: draggedTask.endDate,
+        dependencyIds: draggedTask.dependencies.map(d => parseInt(d)),
+        storyPoints: draggedTask.storyPoints,
+      };
 
-    onUpdateProject({ ...project, tasks: updatedTasks });
+      await taskAPI.updateTask(projectId, taskId, updatedTaskData);
+
+      // Update local state
+      const updatedTasks = project.tasks.map(task =>
+        task.id === draggedTask.id ? { ...task, status } : task
+      );
+
+      onUpdateProject({ ...project, tasks: updatedTasks });
+    } catch (error) {
+      console.error('Failed to update task status:', error);
+      alert('Failed to update task status. Please try again.');
+    }
+    
     setDraggedTask(null);
   };
 
@@ -179,10 +209,10 @@ function TaskCard({ task, allTasks, onDragStart, onClick }: TaskCardProps) {
           {task.priority}
         </span>
         
-        {task.duration && (
+        {task.estimatedDuration && (
           <span className="flex items-center gap-1 text-xs text-gray-600">
             <Clock className="w-3 h-3" />
-            {task.duration}d
+            {task.estimatedDuration}d
           </span>
         )}
 

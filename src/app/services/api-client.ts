@@ -67,6 +67,25 @@ async function apiRequest<T>(endpoint: string, options: RequestInit = {}): Promi
 // Type Definitions
 // ============================================================================
 
+export interface TaskDto {
+  taskID?: number;
+  projectID?: number;
+  taskName: string;
+  description: string;
+  status: string;
+  priority: string;
+  estimatedDuration?: number;
+  assignee?: string;
+  assigneeId?: number;
+  requiredSkills: string[];
+  skillIds?: number[];
+  startDate?: string;
+  endDate?: string;
+  dependencyIds?: number[];
+  sprintId?: number;
+  storyPoints?: number;
+}
+
 export interface UserDto {
   userID?: number;
   name: string;
@@ -299,6 +318,40 @@ export const sprintAPI = {
 
   async deleteSprint(id: number): Promise<void> {
     return apiRequest<void>(`/api/v1/sprints/${id}`, {
+      method: 'DELETE',
+    });
+  },
+};
+
+// ============================================================================
+// Task API
+// ============================================================================
+
+export const taskAPI = {
+  async getProjectTasks(projectId: number): Promise<TaskDto[]> {
+    return apiRequest<TaskDto[]>(`/api/v1/project/${projectId}/tasks`);
+  },
+
+  async getTaskById(projectId: number, taskId: number): Promise<TaskDto> {
+    return apiRequest<TaskDto>(`/api/v1/project/${projectId}/tasks/${taskId}`);
+  },
+
+  async createTask(projectId: number, data: TaskDto): Promise<TaskDto> {
+    return apiRequest<TaskDto>(`/api/v1/project/${projectId}/tasks`, {
+      method: 'POST',
+      body: JSON.stringify(data),
+    });
+  },
+
+  async updateTask(projectId: number, taskId: number, data: TaskDto): Promise<TaskDto> {
+    return apiRequest<TaskDto>(`/api/v1/project/${projectId}/tasks/${taskId}`, {
+      method: 'PUT',
+      body: JSON.stringify(data),
+    });
+  },
+
+  async deleteTask(projectId: number, taskId: number): Promise<void> {
+    return apiRequest<void>(`/api/v1/project/${projectId}/tasks/${taskId}`, {
       method: 'DELETE',
     });
   },

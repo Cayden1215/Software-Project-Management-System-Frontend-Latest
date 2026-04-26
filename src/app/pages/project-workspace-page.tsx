@@ -107,7 +107,7 @@ export default function ProjectWorkspacePage({
   }
 
   // Compare user ID instead of email - the manager field stores the projectManagerID
-  const isProjectManager = project.manager === currentUser.id || currentUser.role === 'admin';
+  const isProjectManager = project.manager === currentUser.id || currentUser.role === 'manager';
 
   return (
     <ProjectWorkspace

@@ -17,7 +17,7 @@ export function TaskModal({ task, allTasks, project, isManager, onSave, onDelete
     title: '',
     description: '',
     status: 'todo',
-    duration: 1,
+    estimatedDuration: 1,
     dependencies: [],
     requiredSkills: [],
     priority: 'medium',
@@ -41,7 +41,7 @@ export function TaskModal({ task, allTasks, project, isManager, onSave, onDelete
       assignee: formData.assignee,
       startDate: formData.startDate,
       endDate: formData.endDate,
-      duration: formData.duration || 1,
+      estimatedDuration: formData.estimatedDuration || 1,
       dependencies: formData.dependencies || [],
       requiredSkills: formData.requiredSkills || [],
       priority: formData.priority || 'medium',
@@ -113,8 +113,8 @@ export function TaskModal({ task, allTasks, project, isManager, onSave, onDelete
               </label>
               <input
                 type="number"
-                value={formData.duration}
-                onChange={(e) => setFormData({ ...formData, duration: parseInt(e.target.value) || 1 })}
+                value={formData.estimatedDuration}
+                onChange={(e) => setFormData({ ...formData, estimatedDuration: parseInt(e.target.value) || 1 })}
                 min="1"
                 className="w-full px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-purple-500 focus:border-transparent"
                 required
