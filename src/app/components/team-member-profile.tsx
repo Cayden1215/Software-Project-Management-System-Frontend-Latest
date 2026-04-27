@@ -1,6 +1,8 @@
 import { useState } from 'react';
 import { Project, User } from '../App';
 import { UserIcon, Award, Mail, Briefcase, Edit2, Save, X } from 'lucide-react';
+import { projectMemberSkillAPI, skillAPI } from '../services/api-client';
+import { toast } from 'sonner';
 
 interface TeamMemberProfileProps {
   project: Project;
@@ -10,6 +12,7 @@ interface TeamMemberProfileProps {
 
 export function TeamMemberProfile({ project, currentUser, onUpdateProject }: TeamMemberProfileProps) {
   const [isEditing, setIsEditing] = useState(false);
+  const [isBusy, setIsBusy] = useState(false);
   
   const currentMember = project.teamMembers.find(tm => tm.email === currentUser.email);
   
@@ -18,17 +21,53 @@ export function TeamMemberProfile({ project, currentUser, onUpdateProject }: Tea
     skills: currentMember?.skills || [],
   });
 
-  const handleSave = () => {
+  const handleSave = async () => {
     if (!currentMember) return;
 
-    const updatedTeamMembers = project.teamMembers.map(tm =>
-      tm.email === currentUser.email
-        ? { ...tm, role: formData.role, skills: formData.skills }
-        : tm
-    );
+    const projectId = parseInt(project.id);
+    const projectMemberId = Number(currentMember.id);
+    if (!Number.isFinite(projectId) || projectId <= 0) return;
+    if (!Number.isFinite(projectMemberId) || projectMemberId <= 0) return;
 
-    onUpdateProject({ ...project, teamMembers: updatedTeamMembers });
-    setIsEditing(false);
+    try {
+      setIsBusy(true);
+      const skillDtos = await skillAPI.getProjectSkills(projectId);
+      const idMap: Record<string, number> = {};
+      for (const s of skillDtos) {
+        if (s.skillName && typeof s.skillID === 'number') {
+          idMap[s.skillName] = s.skillID;
+        }
+      }
+
+      const skillIDs = (formData.skills || [])
+        .map((name) => idMap[name])
+        .filter((id): id is number => Number.isFinite(id));
+
+      try {
+        await projectMemberSkillAPI.updateProjectMemberSkills(projectId, projectMemberId, {
+          projectMemberID: projectMemberId,
+          skillIDs,
+        });
+      } catch (e) {
+        await projectMemberSkillAPI.addSkillsToProjectMember(projectId, {
+          projectMemberID: projectMemberId,
+          skillIDs,
+        });
+      }
+
+      const updatedTeamMembers = project.teamMembers.map((tm) =>
+        tm.email === currentUser.email ? { ...tm, role: formData.role, skills: formData.skills } : tm
+      );
+
+      onUpdateProject({ ...project, teamMembers: updatedTeamMembers });
+      toast.success('Profile updated');
+      setIsEditing(false);
+    } catch (e) {
+      console.error('Failed to update profile:', e);
+      toast.error('Failed to update profile');
+    } finally {
+      setIsBusy(false);
+    }
   };
 
   const handleCancel = () => {
@@ -267,6 +306,7 @@ export function TeamMemberProfile({ project, currentUser, onUpdateProject }: Tea
               <div className="flex items-center justify-end gap-2 pt-4 border-t border-gray-200">
                 <button
                   onClick={handleCancel}
+                  disabled={isBusy}
                   className="px-4 py-2 text-gray-700 hover:bg-gray-100 rounded-lg transition-colors flex items-center gap-2"
                 >
                   <X className="w-4 h-4" />
@@ -274,7 +314,7 @@ export function TeamMemberProfile({ project, currentUser, onUpdateProject }: Tea
                 </button>
                 <button
                   onClick={handleSave}
-                  disabled={formData.skills.length === 0}
+                  disabled={isBusy || formData.skills.length === 0}
                   className="px-4 py-2 bg-purple-600 text-white rounded-lg hover:bg-purple-700 transition-colors flex items-center gap-2 disabled:opacity-50 disabled:cursor-not-allowed"
                 >
                   <Save className="w-4 h-4" />

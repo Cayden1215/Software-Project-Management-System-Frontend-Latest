@@ -1,8 +1,8 @@
 import { useState, useEffect } from 'react';
 import { Project, Task } from '../App';
-import { Plus, Search, Filter, Clock, AlertCircle, CheckCircle2, Edit2, Trash2 } from 'lucide-react';
+import { Plus, Search, Filter, Clock, Users, AlertCircle, CheckCircle2, Edit2, Trash2 } from 'lucide-react';
 import { TaskModal } from './task-modal';
-import { taskAPI, TaskDto } from '../services/api-client';
+import { skillAPI, taskAPI, TaskDto } from '../services/api-client';
 
 interface TaskManagementProps {
   project: Project;
@@ -34,19 +34,22 @@ export function TaskManagement({ project, isManager, onUpdateProject }: TaskMana
         id: dto.taskID?.toString() || '',
         title: dto.taskName,
         description: dto.description,
-        status: (dto.status as Task['status']) || 'todo',
+        status: (dto.taskStatus as Task['status']) || 'todo',
         assignee: dto.assignee,
         requiredSkills: dto.requiredSkills || [],
+        skillIDs: dto.skillIDs || [],
         startDate: dto.startDate,
         endDate: dto.endDate,
         estimatedDuration: dto.estimatedDuration || 0,
+        requiredMemberNum: dto.requiredMemberNum ?? 1,
         dependencies: (dto.dependencyIds || []).map(id => id.toString()),
         priority: (dto.priority as Task['priority']) || 'medium',
-        sprintId: dto.sprintId?.toString(),
+        sprintId: dto.sprintID?.toString(),
         storyPoints: dto.storyPoints,
       }));
       
       setTasks(convertedTasks);
+      onUpdateProject({ ...project, tasks: convertedTasks });
     } catch (err) {
       const errorMessage = err instanceof Error ? err.message : 'Failed to fetch tasks';
       setError(errorMessage);
@@ -66,21 +69,35 @@ export function TaskManagement({ project, isManager, onUpdateProject }: TaskMana
       setLoading(true);
       setError(null);
       const projectId = parseInt(project.id);
+
+      const skillDtos = await skillAPI.getProjectSkills(projectId).catch(() => []);
+      const skillIdByName: Record<string, number> = {};
+      for (const s of skillDtos) {
+        if (s.skillName && typeof s.skillID === 'number') {
+          skillIdByName[s.skillName] = s.skillID;
+        }
+      }
+      const skillIds = (task.requiredSkills ?? [])
+        .map((name) => skillIdByName[name])
+        .filter((id): id is number => Number.isFinite(id));
+
       const taskDto: TaskDto = {
         taskID: task.id ? parseInt(task.id) : undefined,
         projectID: projectId,
         taskName: task.title,
         description: task.description,
-        status: task.status,
+        taskStatus: task.status,
         priority: task.priority,
-        estimatedDuration: task.estimatedDuration,
+        estimatedDuration: task.estimatedDuration ?? 1,
+        requiredMemberNum: task.requiredMemberNum ?? 1,
         assignee: task.assignee,
-        requiredSkills: task.requiredSkills,
+        requiredSkills: task.requiredSkills ?? [],
+        skillIDs: skillIds,
         startDate: task.startDate,
         endDate: task.endDate,
         dependencyIds: task.dependencies.map(id => parseInt(id)),
-        sprintId: task.sprintId ? parseInt(task.sprintId) : undefined,
-        storyPoints: task.storyPoints,
+        sprintID: task.sprintId ? parseInt(task.sprintId) : undefined,
+        storyPoints: task.storyPoints ?? 0,
       };
 
       if (editingTask) {
@@ -381,6 +398,13 @@ export function TaskManagement({ project, isManager, onUpdateProject }: TaskMana
                           <span className="flex items-center gap-1">
                             <Clock className="w-4 h-4" />
                             {task.estimatedDuration} days
+                          </span>
+                        )}
+
+                        {task.requiredMemberNum !== undefined && (
+                          <span className="flex items-center gap-1">
+                            <Users className="w-4 h-4" />
+                            {task.requiredMemberNum} member{task.requiredMemberNum === 1 ? '' : 's'} required
                           </span>
                         )}
 

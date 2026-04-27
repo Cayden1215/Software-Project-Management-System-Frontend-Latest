@@ -1,7 +1,8 @@
-import { useMemo, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import { Project, Task } from '../App';
-import { ArrowRight, AlertCircle, Sparkles, X, Plus, Calendar as CalendarIcon, Edit2, Search } from 'lucide-react';
+import { ArrowRight, AlertCircle, Sparkles, X, Plus, Calendar as CalendarIcon, Edit2, Search, Loader2 } from 'lucide-react';
 import { AIScheduler } from './ai-scheduler';
+import { schedulerAPI, type TaskAssignmentDto } from '../services/api-client';
 
 interface TimelineViewProps {
   project: Project;
@@ -13,9 +14,114 @@ export function TimelineView({ project, isManager, onUpdateProject }: TimelineVi
   const [showAIScheduler, setShowAIScheduler] = useState(false);
   const [showAddTaskModal, setShowAddTaskModal] = useState(false);
   const [editingTaskDates, setEditingTaskDates] = useState<Task | null>(null);
+  const [assignments, setAssignments] = useState<TaskAssignmentDto[] | null>(null);
+  const [assignmentsLoading, setAssignmentsLoading] = useState(false);
+  const [assignmentsError, setAssignmentsError] = useState<string | null>(null);
+
+  const refreshAssignments = async () => {
+    const projectId = Number(project.id);
+    if (!Number.isFinite(projectId)) return;
+
+    setAssignmentsLoading(true);
+    setAssignmentsError(null);
+    try {
+      const result = await schedulerAPI.getProjectAssignments(projectId);
+      setAssignments(result);
+    } catch (err: any) {
+      console.error('Failed to load project assignments:', err);
+      setAssignmentsError(err?.message || 'Failed to load timeline data');
+      setAssignments(null);
+    } finally {
+      setAssignmentsLoading(false);
+    }
+  };
+
+  useEffect(() => {
+    refreshAssignments();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [project.id]);
+
+  const hasAssignmentTimeline = useMemo(() => {
+    return (assignments || []).some((a) => Boolean(a.scheduledStartDate));
+  }, [assignments]);
+
+  const scheduledTaskIdSet = useMemo(() => {
+    const set = new Set<string>();
+    for (const a of assignments || []) {
+      if (a.scheduledStartDate && a.taskID != null) set.add(String(a.taskID));
+    }
+    return set;
+  }, [assignments]);
 
   const timelineData = useMemo(() => {
-    if (project.tasks.length === 0) return null;
+    if (project.tasks.length === 0 && !hasAssignmentTimeline) return null;
+
+    const parseDate = (value?: string): Date | null => {
+      if (!value) return null;
+      const date = new Date(value);
+      return Number.isNaN(date.getTime()) ? null : date;
+    };
+
+    const dayMs = 1000 * 60 * 60 * 24;
+
+    if (hasAssignmentTimeline) {
+      const scheduled = (assignments || []).filter((a) => a.scheduledStartDate);
+      if (scheduled.length === 0) return null;
+
+      const tasksWithDates = scheduled
+        .map((assignment) => {
+          const taskId = assignment.taskID != null ? String(assignment.taskID) : '';
+          const projectTask = taskId ? project.tasks.find((t) => t.id === taskId) : undefined;
+
+          const start = parseDate(assignment.scheduledStartDate || undefined);
+          if (!start) return null;
+
+          const endFromApi = parseDate(assignment.scheduledEndDate || undefined);
+          const fallbackDuration = projectTask?.estimatedDuration ?? 1;
+          const end = endFromApi
+            ? endFromApi
+            : (() => {
+                const computed = new Date(start);
+                computed.setDate(computed.getDate() + fallbackDuration);
+                return computed;
+              })();
+
+          const duration = Math.max(1, Math.ceil((end.getTime() - start.getTime()) / dayMs));
+
+          return {
+            id: taskId || (assignment.assignmentID != null ? String(assignment.assignmentID) : ''),
+            title: assignment.taskName || projectTask?.title || 'Task',
+            description: projectTask?.description || '',
+            status: projectTask?.status || 'todo',
+            priority: projectTask?.priority || 'medium',
+            requiredSkills: projectTask?.requiredSkills || [],
+            skillIDs: projectTask?.skillIDs,
+            startDate: start,
+            endDate: end,
+            estimatedDuration: duration,
+            requiredMemberNum: assignment.requiredMemberNum ?? projectTask?.requiredMemberNum,
+            dependencies: projectTask?.dependencies || [],
+            sprintId: projectTask?.sprintId,
+            storyPoints: projectTask?.storyPoints,
+            assignedMemberNames: assignment.assignedMemberNames || [],
+          } as any;
+        })
+        .filter(Boolean)
+        .sort((a: any, b: any) => (a.startDate as Date).getTime() - (b.startDate as Date).getTime());
+
+      if (tasksWithDates.length === 0) return null;
+
+      const dateTimes = tasksWithDates.flatMap((t: any) => [
+        (t.startDate as Date).getTime(),
+        (t.endDate as Date).getTime(),
+      ]);
+
+      const minDate = new Date(Math.min(...dateTimes));
+      const maxDate = new Date(Math.max(...dateTimes));
+      maxDate.setDate(maxDate.getDate() + 30);
+
+      return { minDate, maxDate, tasksWithDates };
+    }
 
     // Calculate date range
     const dates = project.tasks
@@ -32,7 +138,7 @@ export function TimelineView({ project, isManager, onUpdateProject }: TimelineVi
       const start = new Date(task.startDate!);
       const end = task.endDate ? new Date(task.endDate) : new Date(start);
       if (!task.endDate) {
-        end.setDate(end.getDate() + task.duration);
+        end.setDate(end.getDate() + task.estimatedDuration);
       }
       return { ...task, startDate: start, endDate: end };
     });
@@ -41,14 +147,14 @@ export function TimelineView({ project, isManager, onUpdateProject }: TimelineVi
     maxDate.setDate(maxDate.getDate() + 30);
 
     return { minDate, maxDate, tasksWithDates };
-  }, [project.tasks]);
+  }, [assignments, hasAssignmentTimeline, project.tasks]);
 
   const handleAddTaskToTimeline = (taskId: string, startDate: string) => {
     const updatedTasks = project.tasks.map(task => {
       if (task.id === taskId) {
         const start = new Date(startDate);
         const end = new Date(start);
-        end.setDate(end.getDate() + task.duration);
+        end.setDate(end.getDate() + task.estimatedDuration);
         return {
           ...task,
           startDate,
@@ -83,17 +189,29 @@ export function TimelineView({ project, isManager, onUpdateProject }: TimelineVi
     setEditingTaskDates(null);
   };
 
-  const unscheduledTasks = project.tasks.filter(t => !t.startDate);
+  const unscheduledTasks = hasAssignmentTimeline
+    ? project.tasks.filter((t) => !scheduledTaskIdSet.has(t.id))
+    : project.tasks.filter((t) => !t.startDate);
 
   if (!timelineData || timelineData.tasksWithDates.length === 0) {
     return (
       <div className="bg-white rounded-lg p-12 text-center border border-gray-200">
-        <AlertCircle className="w-12 h-12 mx-auto mb-3 text-gray-400" />
-        <h3 className="text-gray-900 mb-2">No Timeline Data</h3>
-        <p className="text-gray-600 mb-4">
-          Tasks need start dates to appear in the timeline view.
-          {isManager && ' Use the AI Scheduler or manually add tasks to the timeline.'}
-        </p>
+        {assignmentsLoading ? (
+          <>
+            <Loader2 className="w-12 h-12 mx-auto mb-3 text-gray-400 animate-spin" />
+            <h3 className="text-gray-900 mb-2">Loading Timeline</h3>
+            <p className="text-gray-600 mb-4">Fetching scheduled tasks from the API…</p>
+          </>
+        ) : (
+          <>
+            <AlertCircle className="w-12 h-12 mx-auto mb-3 text-gray-400" />
+            <h3 className="text-gray-900 mb-2">No Timeline Data</h3>
+            <p className="text-gray-600 mb-4">
+              {assignmentsError ? assignmentsError : 'Tasks need start dates to appear in the timeline view.'}
+              {isManager && ' Use the AI Scheduler or manually add tasks to the timeline.'}
+            </p>
+          </>
+        )}
         {isManager && (
           <div className="flex items-center justify-center gap-3">
             <button
@@ -107,6 +225,8 @@ export function TimelineView({ project, isManager, onUpdateProject }: TimelineVi
               <button
                 className="px-4 py-2 bg-purple-500 text-white rounded hover:bg-purple-600 flex items-center gap-2"
                 onClick={() => setShowAddTaskModal(true)}
+                disabled={hasAssignmentTimeline}
+                title={hasAssignmentTimeline ? 'Manual scheduling is disabled when using the AI schedule timeline.' : undefined}
               >
                 <Plus className="w-4 h-4" />
                 Add Task to Timeline
@@ -118,7 +238,10 @@ export function TimelineView({ project, isManager, onUpdateProject }: TimelineVi
           <AIScheduler
             project={project}
             onClose={() => setShowAIScheduler(false)}
-            onUpdateProject={onUpdateProject}
+            onScheduleComplete={() => {
+              setShowAIScheduler(false);
+              refreshAssignments();
+            }}
           />
         )}
         {showAddTaskModal && (
@@ -197,8 +320,11 @@ export function TimelineView({ project, isManager, onUpdateProject }: TimelineVi
           <p className="text-gray-600">
             {minDate.toLocaleDateString()} - {maxDate.toLocaleDateString()}
           </p>
+          {hasAssignmentTimeline && (
+            <p className="text-sm text-gray-500 mt-1">Showing schedule from AI assignments.</p>
+          )}
         </div>
-        {isManager && unscheduledTasks.length > 0 && (
+        {isManager && unscheduledTasks.length > 0 && !hasAssignmentTimeline && (
           <button
             onClick={() => setShowAddTaskModal(true)}
             className="px-4 py-2 bg-purple-500 text-white rounded hover:bg-purple-600 flex items-center gap-2"
@@ -239,16 +365,17 @@ export function TimelineView({ project, isManager, onUpdateProject }: TimelineVi
             {/* Tasks */}
             <div className="space-y-3 relative">
               {tasksWithDates.map((task) => {
-                const position = getTaskPosition(task.startDate as Date, task.duration);
+                const position = getTaskPosition(task.startDate as Date, task.estimatedDuration);
                 const dependencies = project.tasks.filter(t => task.dependencies.includes(t.id));
                 const assignedMember = project.teamMembers.find(m => m.email === task.assignee);
+                const assignedNames = (task as any).assignedMemberNames as string[] | undefined;
 
                 return (
                   <div key={task.id} className="relative h-16">
                     <div className="absolute left-0 top-0 bottom-0 flex items-center w-48 pr-4">
                       <div>
                         <div className="text-gray-900 text-sm truncate">{task.title}</div>
-                        <div className="text-xs text-gray-600">{task.duration} days</div>
+                        <div className="text-xs text-gray-600">{task.estimatedDuration} days</div>
                       </div>
                     </div>
                     
@@ -261,7 +388,7 @@ export function TimelineView({ project, isManager, onUpdateProject }: TimelineVi
                           <span className="text-white text-sm truncate">{task.title}</span>
                           <div className="flex items-center gap-2">
                             <span className={`w-2 h-2 rounded-full ${getPriorityColor(task.priority)} flex-shrink-0`} />
-                            {isManager && (
+                            {isManager && !hasAssignmentTimeline && (
                               <button
                                 onClick={() => setEditingTaskDates(task as any)}
                                 className="opacity-0 group-hover:opacity-100 transition-opacity p-1 hover:bg-white hover:bg-opacity-20 rounded"
@@ -280,7 +407,11 @@ export function TimelineView({ project, isManager, onUpdateProject }: TimelineVi
                             <div className="text-gray-300 mt-1">
                               {(task.startDate as Date).toLocaleDateString()} - {(task.endDate as Date).toLocaleDateString()}
                             </div>
-                            {assignedMember && (
+                            {assignedNames && assignedNames.length > 0 ? (
+                              <div className="text-gray-300 mt-1">
+                                Assigned to: {assignedNames.join(', ')}
+                              </div>
+                            ) : assignedMember ? (
                               <div className="text-gray-300 mt-1 flex items-center gap-2">
                                 <div className="w-5 h-5 bg-purple-500 rounded-full flex items-center justify-center">
                                   <span className="text-[10px] text-white">
@@ -289,7 +420,7 @@ export function TimelineView({ project, isManager, onUpdateProject }: TimelineVi
                                 </div>
                                 <span>Assigned to: {assignedMember.name}</span>
                               </div>
-                            )}
+                            ) : null}
                             {dependencies.length > 0 && (
                               <div className="text-gray-300 mt-1">
                                 Depends on: {dependencies.map(d => d.title).join(', ')}
@@ -303,7 +434,7 @@ export function TimelineView({ project, isManager, onUpdateProject }: TimelineVi
                       {dependencies.map(dep => {
                         if (!dep.startDate) return null;
                         const depEnd = new Date(dep.startDate);
-                        depEnd.setDate(depEnd.getDate() + dep.duration);
+                        depEnd.setDate(depEnd.getDate() + dep.estimatedDuration);
                         const taskStart = task.startDate as Date;
                         
                         if (depEnd < taskStart) {
@@ -382,7 +513,10 @@ export function TimelineView({ project, isManager, onUpdateProject }: TimelineVi
               <AIScheduler
                 project={project}
                 onClose={() => setShowAIScheduler(false)}
-                onUpdateProject={onUpdateProject}
+                onScheduleComplete={() => {
+                  setShowAIScheduler(false);
+                  refreshAssignments();
+                }}
               />
             </div>
           </div>
@@ -557,7 +691,7 @@ function AddTaskToTimelineModal({ tasks, onAdd, onClose }: AddTaskToTimelineModa
                           <span className={`px-2 py-0.5 rounded text-xs ${getPriorityColor(task.priority)}`}>
                             {task.priority}
                           </span>
-                          <span className="text-sm text-gray-600">({task.duration} days)</span>
+                          <span className="text-sm text-gray-600">({task.estimatedDuration} days)</span>
                         </div>
                         {task.description && (
                           <p className="text-sm text-gray-600 line-clamp-2">{task.description}</p>
@@ -588,7 +722,7 @@ function AddTaskToTimelineModal({ tasks, onAdd, onClose }: AddTaskToTimelineModa
             <div className="p-4 bg-blue-50 border-t border-blue-100 flex-shrink-0">
               <div className="text-sm text-blue-700">
                 <strong>{tasks.find(t => t.id === selectedTaskId)?.title}</strong> will be scheduled from {new Date(startDate).toLocaleDateString()} 
-                {' '}(Duration: {tasks.find(t => t.id === selectedTaskId)?.duration} days)
+                {' '}(Duration: {tasks.find(t => t.id === selectedTaskId)?.estimatedDuration} days)
               </div>
             </div>
           )}
@@ -645,7 +779,7 @@ function EditTaskDatesModal({ task, onSave, onClose }: EditTaskDatesModalProps) 
       const duration = Math.ceil((end.getTime() - start.getTime()) / (1000 * 60 * 60 * 24));
       return Math.max(1, duration);
     }
-    return task.duration;
+    return task.estimatedDuration;
   };
 
   return (
@@ -665,7 +799,7 @@ function EditTaskDatesModal({ task, onSave, onClose }: EditTaskDatesModalProps) 
           <div className="mb-4">
             <div className="text-gray-900 mb-1">{task.title}</div>
             <div className="text-sm text-gray-600">
-              Current duration: {task.duration} days
+              Current duration: {task.estimatedDuration} days
             </div>
           </div>
 

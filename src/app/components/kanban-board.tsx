@@ -2,7 +2,8 @@ import { useState } from 'react';
 import { Project, Task } from '../App';
 import { Plus, GripVertical, Clock, AlertCircle, CheckCircle2 } from 'lucide-react';
 import { TaskModal } from './task-modal';
-import { taskAPI } from '../services/api-client';
+import { skillAPI, taskAPI, TaskDto } from '../services/api-client';
+import { toast } from 'sonner';
 
 interface KanbanBoardProps {
   project: Project;
@@ -21,6 +22,32 @@ export function KanbanBoard({ project, isManager, onUpdateProject }: KanbanBoard
   const [draggedTask, setDraggedTask] = useState<Task | null>(null);
   const [showTaskModal, setShowTaskModal] = useState(false);
   const [editingTask, setEditingTask] = useState<Task | null>(null);
+  const [isBusy, setIsBusy] = useState(false);
+
+  const refreshTasks = async () => {
+    const projectId = parseInt(project.id);
+    if (!Number.isFinite(projectId) || projectId <= 0) return;
+    const taskDtos = await taskAPI.getProjectTasks(projectId);
+    const convertedTasks: Task[] = taskDtos.map((dto) => ({
+      id: dto.taskID?.toString() || '',
+      title: dto.taskName,
+      description: dto.description,
+      status: (dto.taskStatus as Task['status']) || 'todo',
+      assignee: dto.assignee,
+      requiredSkills: dto.requiredSkills || [],
+      skillIDs: dto.skillIDs || [],
+      startDate: dto.startDate,
+      endDate: dto.endDate,
+      estimatedDuration: dto.estimatedDuration || 0,
+      requiredMemberNum: dto.requiredMemberNum ?? 1,
+      dependencies: (dto.dependencyIds || []).map((id) => id.toString()),
+      priority: (dto.priority as Task['priority']) || 'medium',
+      sprintId: dto.sprintID?.toString(),
+      storyPoints: dto.storyPoints,
+    }));
+
+    onUpdateProject({ ...project, tasks: convertedTasks });
+  };
 
   const handleDragStart = (task: Task) => {
     setDraggedTask(task);
@@ -37,17 +64,30 @@ export function KanbanBoard({ project, isManager, onUpdateProject }: KanbanBoard
       // Update task status via API
       const projectId = parseInt(project.id);
       const taskId = parseInt(draggedTask.id);
+
+      const skillDtos = await skillAPI.getProjectSkills(projectId).catch(() => []);
+      const skillIdByName: Record<string, number> = {};
+      for (const s of skillDtos) {
+        if (s.skillName && typeof s.skillID === 'number') {
+          skillIdByName[s.skillName] = s.skillID;
+        }
+      }
+      const skillIDs = (draggedTask.requiredSkills ?? [])
+        .map((name) => skillIdByName[name])
+        .filter((id): id is number => Number.isFinite(id));
       
       const updatedTaskData = {
         taskID: taskId,
         projectID: projectId,
         taskName: draggedTask.title,
         description: draggedTask.description,
-        status: status,
+        taskStatus: status,
         priority: draggedTask.priority,
-        estimatedDuration: draggedTask.estimatedDuration,
+        estimatedDuration: draggedTask.estimatedDuration ?? 1,
+        requiredMemberNum: draggedTask.requiredMemberNum ?? 1,
         assignee: draggedTask.assignee,
         requiredSkills: draggedTask.requiredSkills,
+        skillIds: skillIDs,
         startDate: draggedTask.startDate,
         endDate: draggedTask.endDate,
         dependencyIds: draggedTask.dependencies.map(d => parseInt(d)),
@@ -70,25 +110,80 @@ export function KanbanBoard({ project, isManager, onUpdateProject }: KanbanBoard
     setDraggedTask(null);
   };
 
-  const handleSaveTask = (task: Task) => {
-    let updatedTasks: Task[];
-    
-    if (editingTask) {
-      updatedTasks = project.tasks.map(t => t.id === task.id ? task : t);
-    } else {
-      updatedTasks = [...project.tasks, task];
-    }
+  const handleSaveTask = async (task: Task) => {
+    const projectId = parseInt(project.id);
+    if (!Number.isFinite(projectId) || projectId <= 0) return;
 
-    onUpdateProject({ ...project, tasks: updatedTasks });
-    setShowTaskModal(false);
-    setEditingTask(null);
+    const skillDtos = await skillAPI.getProjectSkills(projectId).catch(() => []);
+    const skillIdByName: Record<string, number> = {};
+    for (const s of skillDtos) {
+      if (s.skillName && typeof s.skillID === 'number') {
+        skillIdByName[s.skillName] = s.skillID;
+      }
+    }
+    const skillIDs = (task.requiredSkills ?? [])
+      .map((name) => skillIdByName[name])
+      .filter((id): id is number => Number.isFinite(id));
+
+    const taskDto: TaskDto = {
+      taskID: editingTask ? parseInt(task.id) : undefined,
+      projectID: projectId,
+      taskName: task.title,
+      description: task.description,
+      taskStatus: task.status,
+      priority: task.priority,
+      estimatedDuration: task.estimatedDuration ?? 1,
+      requiredMemberNum: task.requiredMemberNum ?? 1,
+      assignee: task.assignee,
+      requiredSkills: task.requiredSkills ?? [],
+      skillIds: skillIDs,
+      startDate: task.startDate,
+      endDate: task.endDate,
+      dependencyIds: task.dependencies.map((id) => parseInt(id)).filter((n) => Number.isFinite(n)),
+      sprintID: task.sprintId ? parseInt(task.sprintId) : undefined,
+      storyPoints: task.storyPoints,
+    };
+
+    try {
+      setIsBusy(true);
+      if (editingTask) {
+        await taskAPI.updateTask(projectId, parseInt(task.id), taskDto);
+        toast.success('Task updated');
+      } else {
+        await taskAPI.createTask(projectId, taskDto);
+        toast.success('Task created');
+      }
+
+      await refreshTasks();
+      setShowTaskModal(false);
+      setEditingTask(null);
+    } catch (e) {
+      console.error('Failed to save task:', e);
+      toast.error('Failed to save task');
+    } finally {
+      setIsBusy(false);
+    }
   };
 
-  const handleDeleteTask = (taskId: string) => {
-    const updatedTasks = project.tasks.filter(t => t.id !== taskId);
-    onUpdateProject({ ...project, tasks: updatedTasks });
-    setShowTaskModal(false);
-    setEditingTask(null);
+  const handleDeleteTask = async (taskId: string) => {
+    const projectId = parseInt(project.id);
+    const idNum = parseInt(taskId);
+    if (!Number.isFinite(projectId) || projectId <= 0) return;
+    if (!Number.isFinite(idNum) || idNum <= 0) return;
+
+    try {
+      setIsBusy(true);
+      await taskAPI.deleteTask(projectId, idNum);
+      toast.success('Task deleted');
+      await refreshTasks();
+      setShowTaskModal(false);
+      setEditingTask(null);
+    } catch (e) {
+      console.error('Failed to delete task:', e);
+      toast.error('Failed to delete task');
+    } finally {
+      setIsBusy(false);
+    }
   };
 
   const handleEditTask = (task: Task) => {

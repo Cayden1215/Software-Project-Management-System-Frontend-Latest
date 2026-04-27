@@ -36,9 +36,11 @@ export interface Task {
   status: 'todo' | 'in-progress' | 'review' | 'done';
   assignee?: string;
   requiredSkills: string[];
+  skillIDs?: number[];
   startDate?: string;
   endDate?: string;
   estimatedDuration: number; // in days
+  requiredMemberNum?: number; // minimum members required
   dependencies: string[]; // task IDs
   priority: 'low' | 'medium' | 'high';
   sprintId?: string; // Sprint assignment

@@ -1,7 +1,9 @@
-import { useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import { Project, TeamMember } from '../App';
-import { Users, Plus, Edit2, Trash2, Award, X } from 'lucide-react';
+import { Users, Plus, Edit2, Trash2, Award } from 'lucide-react';
 import { TeamMemberModal } from './team-member-modal';
+import { projectAPI, projectMemberSkillAPI, skillAPI } from '../services/api-client';
+import { toast } from 'sonner';
 
 interface ResourceManagementProps {
   project: Project;
@@ -13,26 +15,139 @@ export function ResourceManagement({ project, isManager, onUpdateProject }: Reso
   const [showMemberModal, setShowMemberModal] = useState(false);
   const [editingMember, setEditingMember] = useState<TeamMember | null>(null);
   const [newSkill, setNewSkill] = useState('');
-  const [editingSkill, setEditingSkill] = useState<string | null>(null);
-  const [editSkillValue, setEditSkillValue] = useState('');
+  const [isBusy, setIsBusy] = useState(false);
+  const [skillIdByName, setSkillIdByName] = useState<Record<string, number>>({});
 
-  const handleSaveMember = (member: TeamMember) => {
-    let updatedMembers: TeamMember[];
-    
-    if (editingMember) {
-      updatedMembers = project.teamMembers.map(m => m.id === member.id ? member : m);
-    } else {
-      updatedMembers = [...project.teamMembers, member];
+  const projectId = useMemo(() => Number(project.id), [project.id]);
+
+  const refreshSkills = async () => {
+    if (!Number.isFinite(projectId) || projectId <= 0) return;
+    const skillDtos = await skillAPI.getProjectSkills(projectId);
+    const names = Array.from(new Set(skillDtos.map((s) => s.skillName).filter(Boolean))).sort();
+    const idMap: Record<string, number> = {};
+    for (const s of skillDtos) {
+      if (s.skillName && typeof s.skillID === 'number') {
+        idMap[s.skillName] = s.skillID;
+      }
     }
-
-    onUpdateProject({ ...project, teamMembers: updatedMembers });
-    setShowMemberModal(false);
-    setEditingMember(null);
+    setSkillIdByName(idMap);
+    onUpdateProject({ ...project, registeredSkills: names });
   };
 
-  const handleDeleteMember = (memberId: string) => {
-    const updatedMembers = project.teamMembers.filter(m => m.id !== memberId);
-    onUpdateProject({ ...project, teamMembers: updatedMembers });
+  const refreshTeamMembers = async () => {
+    if (!Number.isFinite(projectId) || projectId <= 0) return;
+    const memberDtos = await projectAPI.getProjectTeamMembers(projectId);
+    const members: TeamMember[] = memberDtos.map((m) => ({
+      id: (m.projectMemberID ?? m.teamMemberID ?? '').toString(),
+      name: m.teamMemberUsername || m.teamMemberEmail || 'Team Member',
+      email: m.teamMemberEmail || '',
+      role: m.projectRole || 'member',
+      skills: (m.skills || []).map((s) => s.skillName).filter(Boolean),
+    }));
+    onUpdateProject({
+      ...project,
+      teamMembers: members,
+      members: members.map((m) => m.email).filter(Boolean),
+    });
+  };
+
+  useEffect(() => {
+    (async () => {
+      try {
+        await refreshSkills();
+        await refreshTeamMembers();
+      } catch (e) {
+        console.error('Failed to refresh resources:', e);
+      }
+    })();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [projectId]);
+
+  const handleSaveMember = async (member: TeamMember) => {
+    if (isManager && !editingMember) {
+      if (!member.email) return;
+      try {
+        setIsBusy(true);
+        await projectAPI.enrollTeamMember(projectId, {
+          projectID: projectId,
+          teamMemberEmail: member.email,
+          projectRole: member.role,
+        });
+        toast.success('Invitation sent');
+        await refreshTeamMembers();
+        setShowMemberModal(false);
+        setEditingMember(null);
+      } catch (e) {
+        console.error('Failed to invite team member:', e);
+        toast.error('Failed to invite team member');
+      } finally {
+        setIsBusy(false);
+      }
+      return;
+    }
+
+    const projectMemberId = Number(member.id);
+    if (!Number.isFinite(projectMemberId) || projectMemberId <= 0) {
+      toast.error('Unable to update team member (invalid member id)');
+      return;
+    }
+
+    try {
+      setIsBusy(true);
+      const skillDtos = await skillAPI.getProjectSkills(projectId);
+      const idMap: Record<string, number> = {};
+      for (const s of skillDtos) {
+        if (s.skillName && typeof s.skillID === 'number') {
+          idMap[s.skillName] = s.skillID;
+        }
+      }
+
+      const skillIDs = (member.skills || [])
+        .map((name) => idMap[name])
+        .filter((id): id is number => Number.isFinite(id));
+
+      try {
+        await projectMemberSkillAPI.updateProjectMemberSkills(projectId, projectMemberId, {
+          projectMemberID: projectMemberId,
+          skillIDs,
+        });
+      } catch (e) {
+        await projectMemberSkillAPI.addSkillsToProjectMember(projectId, {
+          projectMemberID: projectMemberId,
+          skillIDs,
+        });
+      }
+
+      toast.success('Team member updated');
+      await refreshTeamMembers();
+      setShowMemberModal(false);
+      setEditingMember(null);
+    } catch (e) {
+      console.error('Failed to update team member:', e);
+      toast.error('Failed to update team member');
+    } finally {
+      setIsBusy(false);
+    }
+  };
+
+  const handleDeleteMember = async (memberId: string) => {
+    const idNum = Number(memberId);
+    if (!Number.isFinite(idNum)) {
+      toast.error('Unable to remove member (invalid member id)');
+      return;
+    }
+
+    try {
+      setIsBusy(true);
+      await projectAPI.removeProjectTeamMember(projectId, idNum);
+      toast.success('Team member removed');
+      await refreshTeamMembers();
+    } catch (e) {
+      console.error('Failed to remove team member:', e);
+      toast.error('Failed to remove team member');
+    } finally {
+      setIsBusy(false);
+    }
   };
 
   const handleEditMember = (member: TeamMember) => {
@@ -41,72 +156,53 @@ export function ResourceManagement({ project, isManager, onUpdateProject }: Reso
   };
 
   // Skills Management
-  const handleAddSkill = () => {
-    if (newSkill.trim() && !project.registeredSkills.includes(newSkill.trim())) {
-      onUpdateProject({
-        ...project,
-        registeredSkills: [...project.registeredSkills, newSkill.trim()],
-      });
+  const handleAddSkill = async () => {
+    const name = newSkill.trim();
+    if (!name) return;
+    if (project.registeredSkills.includes(name)) return;
+
+    try {
+      setIsBusy(true);
+      await skillAPI.createSkill(projectId, { projectID: projectId, skillName: name });
+      toast.success('Skill created');
       setNewSkill('');
+      await refreshSkills();
+    } catch (e) {
+      console.error('Failed to create skill:', e);
+      toast.error('Failed to create skill');
+    } finally {
+      setIsBusy(false);
     }
   };
 
-  const handleDeleteSkill = (skill: string) => {
+  const handleDeleteSkill = async (skill: string) => {
     // Check if any team member has this skill
     const membersWithSkill = project.teamMembers.filter(m => m.skills.includes(skill));
     if (membersWithSkill.length > 0) {
       if (!confirm(`${membersWithSkill.length} team member(s) have this skill. Remove it anyway?`)) {
         return;
       }
-      // Remove skill from all team members
-      const updatedMembers = project.teamMembers.map(m => ({
-        ...m,
-        skills: m.skills.filter(s => s !== skill),
-      }));
-      onUpdateProject({
-        ...project,
-        teamMembers: updatedMembers,
-        registeredSkills: project.registeredSkills.filter(s => s !== skill),
-      });
-    } else {
-      onUpdateProject({
-        ...project,
-        registeredSkills: project.registeredSkills.filter(s => s !== skill),
-      });
     }
-  };
 
-  const handleEditSkill = (oldSkill: string) => {
-    setEditingSkill(oldSkill);
-    setEditSkillValue(oldSkill);
-  };
-
-  const handleSaveEditSkill = () => {
-    if (editingSkill && editSkillValue.trim() && editSkillValue !== editingSkill) {
-      // Update skill name in registered skills
-      const updatedSkills = project.registeredSkills.map(s => 
-        s === editingSkill ? editSkillValue.trim() : s
-      );
-      
-      // Update skill name in all team members
-      const updatedMembers = project.teamMembers.map(m => ({
-        ...m,
-        skills: m.skills.map(s => s === editingSkill ? editSkillValue.trim() : s),
-      }));
-
-      onUpdateProject({
-        ...project,
-        registeredSkills: updatedSkills,
-        teamMembers: updatedMembers,
-      });
+    try {
+      setIsBusy(true);
+      const knownId = skillIdByName[skill];
+      if (typeof knownId !== 'number') {
+        await refreshSkills();
+      }
+      const skillId = skillIdByName[skill];
+      if (typeof skillId !== 'number') {
+        throw new Error(`Skill ID not found for "${skill}"`);
+      }
+      await skillAPI.deleteSkill(projectId, skillId);
+      toast.success('Skill deleted');
+      await refreshSkills();
+    } catch (e) {
+      console.error('Failed to delete skill:', e);
+      toast.error('Failed to delete skill');
+    } finally {
+      setIsBusy(false);
     }
-    setEditingSkill(null);
-    setEditSkillValue('');
-  };
-
-  const handleCancelEditSkill = () => {
-    setEditingSkill(null);
-    setEditSkillValue('');
   };
 
   // Calculate skill coverage
@@ -178,12 +274,14 @@ export function ResourceManagement({ project, isManager, onUpdateProject }: Reso
                 type="text"
                 value={newSkill}
                 onChange={(e) => setNewSkill(e.target.value)}
-                onKeyPress={(e) => e.key === 'Enter' && handleAddSkill()}
+                onKeyDown={(e) => e.key === 'Enter' && handleAddSkill()}
                 placeholder="Add a new skill (e.g., React, UI/UX Design)"
                 className="flex-1 px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-purple-500 focus:border-transparent"
+                disabled={isBusy}
               />
               <button
                 onClick={handleAddSkill}
+                disabled={isBusy}
                 className="px-4 py-2 bg-purple-600 text-white rounded-lg hover:bg-purple-700 transition-colors flex items-center gap-2"
               >
                 <Plus className="w-4 h-4" />
@@ -211,60 +309,26 @@ export function ResourceManagement({ project, isManager, onUpdateProject }: Reso
                 key={skill}
                 className="p-3 bg-gray-50 rounded-lg border border-gray-200 hover:border-purple-300 transition-colors"
               >
-                {editingSkill === skill ? (
-                  <div className="flex gap-2">
-                    <input
-                      type="text"
-                      value={editSkillValue}
-                      onChange={(e) => setEditSkillValue(e.target.value)}
-                      onKeyPress={(e) => {
-                        if (e.key === 'Enter') handleSaveEditSkill();
-                        if (e.key === 'Escape') handleCancelEditSkill();
-                      }}
-                      className="flex-1 px-2 py-1 border border-gray-300 rounded text-sm focus:ring-2 focus:ring-purple-500"
-                      autoFocus
-                    />
-                    <button
-                      onClick={handleSaveEditSkill}
-                      className="p-1 text-green-600 hover:bg-green-50 rounded"
-                    >
-                      ✓
-                    </button>
-                    <button
-                      onClick={handleCancelEditSkill}
-                      className="p-1 text-red-600 hover:bg-red-50 rounded"
-                    >
-                      ✕
-                    </button>
-                  </div>
-                ) : (
-                  <div className="flex items-center justify-between">
-                    <div className="flex-1">
-                      <div className="text-gray-900">{skill}</div>
-                      <div className="text-xs text-gray-600 mt-1">
-                        {memberCount} member{memberCount !== 1 ? 's' : ''}
-                      </div>
+                <div className="flex items-center justify-between">
+                  <div className="flex-1">
+                    <div className="text-gray-900">{skill}</div>
+                    <div className="text-xs text-gray-600 mt-1">
+                      {memberCount} member{memberCount !== 1 ? 's' : ''}
                     </div>
-                    {isManager && (
-                      <div className="flex gap-1">
-                        <button
-                          onClick={() => handleEditSkill(skill)}
-                          className="p-1 text-gray-600 hover:bg-gray-200 rounded transition-colors"
-                          title="Edit skill"
-                        >
-                          <Edit2 className="w-3 h-3" />
-                        </button>
-                        <button
-                          onClick={() => handleDeleteSkill(skill)}
-                          className="p-1 text-red-600 hover:bg-red-50 rounded transition-colors"
-                          title="Delete skill"
-                        >
-                          <Trash2 className="w-3 h-3" />
-                        </button>
-                      </div>
-                    )}
                   </div>
-                )}
+                  {isManager && (
+                    <div className="flex gap-1">
+                      <button
+                        onClick={() => handleDeleteSkill(skill)}
+                        disabled={isBusy}
+                        className="p-1 text-red-600 hover:bg-red-50 rounded transition-colors disabled:opacity-50"
+                        title="Delete skill"
+                      >
+                        <Trash2 className="w-3 h-3" />
+                      </button>
+                    </div>
+                  )}
+                </div>
               </div>
             ))}
           </div>
@@ -358,6 +422,7 @@ export function ResourceManagement({ project, isManager, onUpdateProject }: Reso
                     <div className="flex gap-2 ml-4">
                       <button
                         onClick={() => handleEditMember(member)}
+                        disabled={isBusy}
                         className="p-2 text-gray-600 hover:bg-gray-100 rounded-lg transition-colors"
                         title="Edit member"
                       >
@@ -369,6 +434,7 @@ export function ResourceManagement({ project, isManager, onUpdateProject }: Reso
                             handleDeleteMember(member.id);
                           }
                         }}
+                        disabled={isBusy}
                         className="p-2 text-red-600 hover:bg-red-50 rounded-lg transition-colors"
                         title="Remove member"
                       >

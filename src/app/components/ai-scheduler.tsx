@@ -2,14 +2,15 @@ import { useState } from 'react';
 import { Sparkles, AlertCircle, CheckCircle2, Zap, Loader2 } from 'lucide-react';
 import { schedulerAPI } from '../services/api-client';
 import { toast } from 'sonner';
+import { Project } from '../App';
 
 interface AISchedulerProps {
-  projectId: number;
+  project: Project;
   onScheduleComplete: () => void;
   onClose: () => void;
 }
 
-export function AIScheduler({ projectId, onScheduleComplete, onClose }: AISchedulerProps) {
+export function AIScheduler({ project, onScheduleComplete, onClose }: AISchedulerProps) {
   const [isGenerating, setIsGenerating] = useState(false);
   const [resultMessage, setResultMessage] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -21,7 +22,7 @@ export function AIScheduler({ projectId, onScheduleComplete, onClose }: AISchedu
 
     try {
       // Call backend AI scheduler API
-      const result = await schedulerAPI.runAIScheduler(projectId);
+      const result = await schedulerAPI.runAIScheduler(parseInt(project.id));
 
       setResultMessage(result);
       toast.success('Schedule generated successfully!');

@@ -72,17 +72,18 @@ export interface TaskDto {
   projectID?: number;
   taskName: string;
   description: string;
-  status: string;
+  taskStatus: string;
   priority: string;
   estimatedDuration?: number;
+  requiredMemberNum?: number;
   assignee?: string;
   assigneeId?: number;
   requiredSkills: string[];
-  skillIds?: number[];
+  skillIDs?: number[];
   startDate?: string;
   endDate?: string;
   dependencyIds?: number[];
-  sprintId?: number;
+  sprintID?: number;
   storyPoints?: number;
 }
 
@@ -235,6 +236,12 @@ export const projectAPI = {
 
   async getProjectTeamMembers(projectId: number): Promise<ProjectMemberDto[]> {
     return apiRequest<ProjectMemberDto[]>(`/api/v1/projects/${projectId}/enrolled`);
+  },
+
+  async removeProjectTeamMember(projectId: number, projectMemberId: number): Promise<void> {
+    return apiRequest<void>(`/api/v1/projects/${projectId}/enrolled/${projectMemberId}`, {
+      method: 'DELETE',
+    });
   },
 };
 
@@ -389,8 +396,8 @@ export const skillAPI = {
 // ============================================================================
 
 export const projectMemberSkillAPI = {
-  async getProjectMemberSkills(projectMemberId: number): Promise<ProjectMemberSkillDto> {
-    return apiRequest<ProjectMemberSkillDto>(`/api/v1/project/{projectId}/project-member-skills/${projectMemberId}`);
+  async getProjectMemberSkills(projectId: number, projectMemberId: number): Promise<ProjectMemberSkillDto> {
+    return apiRequest<ProjectMemberSkillDto>(`/api/v1/project/${projectId}/project-member-skills/${projectMemberId}`);
   },
 
   async addSkillsToProjectMember(projectId: number, data: ProjectMemberSkillDto): Promise<ProjectMemberSkillDto> {
@@ -407,14 +414,14 @@ export const projectMemberSkillAPI = {
     });
   },
 
-  async removeSkillFromProjectMember(projectMemberId: number, skillId: number): Promise<void> {
-    return apiRequest<void>(`/api/v1/project/{projectId}/project-member-skills/${projectMemberId}/skill/${skillId}`, {
+  async removeSkillFromProjectMember(projectId: number, projectMemberId: number, skillId: number): Promise<void> {
+    return apiRequest<void>(`/api/v1/project/${projectId}/project-member-skills/${projectMemberId}/skill/${skillId}`, {
       method: 'DELETE',
     });
   },
 
-  async removeAllSkillsFromProjectMember(projectMemberId: number): Promise<void> {
-    return apiRequest<void>(`/api/v1/project/{projectId}/project-member-skills/${projectMemberId}/all-skills`, {
+  async removeAllSkillsFromProjectMember(projectId: number, projectMemberId: number): Promise<void> {
+    return apiRequest<void>(`/api/v1/project/${projectId}/project-member-skills/${projectMemberId}/all-skills`, {
       method: 'DELETE',
     });
   },

@@ -1,6 +1,7 @@
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useMemo } from 'react';
 import { Task, Project } from '../App';
 import { X, Trash2, AlertCircle } from 'lucide-react';
+import { skillAPI, SkillDto } from '../services/api-client';
 
 interface TaskModalProps {
   task: Task | null;
@@ -18,17 +19,59 @@ export function TaskModal({ task, allTasks, project, isManager, onSave, onDelete
     description: '',
     status: 'todo',
     estimatedDuration: 1,
+    requiredMemberNum: 1,
     dependencies: [],
     requiredSkills: [],
     priority: 'medium',
     ...task,
   });
 
+  const [projectSkills, setProjectSkills] = useState<SkillDto[]>([]);
+
   useEffect(() => {
     if (task) {
-      setFormData(task);
+      setFormData({ ...task, requiredMemberNum: task.requiredMemberNum ?? 1 });
     }
   }, [task]);
+
+  useEffect(() => {
+    let cancelled = false;
+
+    (async () => {
+      const projectId = Number(project.id);
+      if (!Number.isFinite(projectId) || projectId <= 0) return;
+
+      try {
+        const skillDtos = await skillAPI.getProjectSkills(projectId);
+        if (cancelled) return;
+
+        setProjectSkills(skillDtos || []);
+
+        // If the backend only provided `skillIDs`, populate `requiredSkills` so
+        // the UI + save flow can still work with skill names.
+        setFormData((prev) => {
+          const selectedIds = prev.skillIDs || [];
+          const hasNames = (prev.requiredSkills?.length || 0) > 0;
+          if (!selectedIds.length || hasNames) return prev;
+
+          const names = (skillDtos || [])
+            .filter((s) => typeof s.skillID === 'number' && selectedIds.includes(s.skillID))
+            .map((s) => s.skillName)
+            .filter((n): n is string => Boolean(n));
+
+          if (names.length === 0) return prev;
+          return { ...prev, requiredSkills: names };
+        });
+      } catch (e) {
+        if (cancelled) return;
+        setProjectSkills([]);
+      }
+    })();
+
+    return () => {
+      cancelled = true;
+    };
+  }, [project.id, task?.id]);
 
   const handleSubmit = (e: React.FormEvent) => {
     e.preventDefault();
@@ -42,8 +85,10 @@ export function TaskModal({ task, allTasks, project, isManager, onSave, onDelete
       startDate: formData.startDate,
       endDate: formData.endDate,
       estimatedDuration: formData.estimatedDuration || 1,
+      requiredMemberNum: formData.requiredMemberNum ?? 1,
       dependencies: formData.dependencies || [],
       requiredSkills: formData.requiredSkills || [],
+      skillIDs: formData.skillIDs || [],
       priority: formData.priority || 'medium',
       storyPoints: formData.storyPoints,
     };
@@ -61,6 +106,24 @@ export function TaskModal({ task, allTasks, project, isManager, onSave, onDelete
   };
 
   const availableDependencies = allTasks.filter(t => t.id !== task?.id);
+
+  const skillOptions = useMemo(() => {
+    if (projectSkills.length > 0) {
+      return projectSkills
+        .filter((s) => Boolean(s.skillName))
+        .map((s) => ({
+          id: typeof s.skillID === 'number' ? s.skillID : undefined,
+          name: s.skillName,
+        }));
+    }
+
+    const names =
+      project.registeredSkills.length > 0
+        ? project.registeredSkills
+        : Array.from(new Set(project.teamMembers.flatMap((m) => m.skills)));
+
+    return names.map((name) => ({ id: undefined as number | undefined, name }));
+  }, [projectSkills, project.registeredSkills, project.teamMembers]);
 
   return (
     <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center p-4 z-50">
@@ -120,6 +183,27 @@ export function TaskModal({ task, allTasks, project, isManager, onSave, onDelete
                 required
                 disabled={!isManager}
               />
+            </div>
+
+            {/* Required Members */}
+            <div>
+              <label className="block text-gray-700 mb-2">
+                Required Members *
+              </label>
+              <input
+                type="number"
+                value={formData.requiredMemberNum ?? 1}
+                onChange={(e) =>
+                  setFormData({ ...formData, requiredMemberNum: Math.max(1, parseInt(e.target.value) || 1) })
+                }
+                min="1"
+                className="w-full px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-purple-500 focus:border-transparent"
+                required
+                disabled={!isManager}
+              />
+              <p className="text-sm text-gray-500 mt-1">
+                Minimum number of team members needed to work on this task
+              </p>
             </div>
 
             {/* Story Points */}
@@ -229,32 +313,48 @@ export function TaskModal({ task, allTasks, project, isManager, onSave, onDelete
                 Select skills needed to complete this task
               </p>
               
-              {project.teamMembers.length === 0 ? (
+              {skillOptions.length === 0 ? (
                 <p className="text-sm text-gray-500 py-2">
-                  Add team members to define skills
+                  No skills available yet. Add project skills in Resource Management.
                 </p>
               ) : (
                 <div>
-                  {Array.from(new Set(project.teamMembers.flatMap(m => m.skills))).map(skill => (
+                  {skillOptions.map((skill) => (
                     <label
-                      key={skill}
+                      key={skill.id ?? skill.name}
                       className="flex items-center gap-2 p-2 hover:bg-gray-50 cursor-pointer"
                     >
                       <input
                         type="checkbox"
-                        checked={formData.requiredSkills?.includes(skill)}
+                        checked={
+                          typeof skill.id === 'number'
+                            ? (formData.skillIDs || []).includes(skill.id) ||
+                              (formData.requiredSkills || []).includes(skill.name)
+                            : (formData.requiredSkills || []).includes(skill.name)
+                        }
                         onChange={(e) => {
-                          const currentSkills = formData.requiredSkills || [];
-                          const newSkills = e.target.checked
-                            ? [...currentSkills, skill]
-                            : currentSkills.filter(s => s !== skill);
-                          setFormData({ ...formData, requiredSkills: newSkills });
+                          const currentNames = formData.requiredSkills || [];
+                          const nextNames = e.target.checked
+                            ? Array.from(new Set([...currentNames, skill.name]))
+                            : currentNames.filter((s) => s !== skill.name);
+
+                          if (typeof skill.id === 'number') {
+                            const currentIds = formData.skillIDs || [];
+                            const nextIds = e.target.checked
+                              ? Array.from(new Set([...currentIds, skill.id]))
+                              : currentIds.filter((id) => id !== skill.id);
+
+                            setFormData({ ...formData, requiredSkills: nextNames, skillIDs: nextIds });
+                            return;
+                          }
+
+                          setFormData({ ...formData, requiredSkills: nextNames });
                         }}
                         disabled={!isManager}
                       />
-                      <span className="text-gray-900">{skill}</span>
+                      <span className="text-gray-900">{skill.name}</span>
                       <span className="text-sm text-gray-500">
-                        ({project.teamMembers.filter(m => m.skills.includes(skill)).length} members)
+                        ({project.teamMembers.filter(m => m.skills.includes(skill.name)).length} members)
                       </span>
                     </label>
                   ))}

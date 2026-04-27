@@ -72,22 +72,38 @@ export function TeamMemberModal({ member, project, isManager, onSave, onClose }:
           <div className="space-y-4">
             {/* Email - Only field required when inviting (for managers) */}
             {isManager && !member && (
-              <div>
-                <label className="block text-gray-700 mb-2">
-                  Email Address *
-                </label>
-                <input
-                  type="email"
-                  value={formData.email}
-                  onChange={(e) => setFormData({ ...formData, email: e.target.value })}
-                  placeholder="team.member@example.com"
-                  className="w-full px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-purple-500 focus:border-transparent"
-                  required
-                />
-                <p className="text-sm text-gray-500 mt-1">
-                  Team member with this email can enroll to the project and set their profile
-                </p>
-              </div>
+              <>
+                <div>
+                  <label className="block text-gray-700 mb-2">
+                    Email Address *
+                  </label>
+                  <input
+                    type="email"
+                    value={formData.email}
+                    onChange={(e) => setFormData({ ...formData, email: e.target.value })}
+                    placeholder="team.member@example.com"
+                    className="w-full px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-purple-500 focus:border-transparent"
+                    required
+                  />
+                  <p className="text-sm text-gray-500 mt-1">
+                    Team member with this email can enroll to the project and set their profile
+                  </p>
+                </div>
+
+                <div>
+                  <label className="block text-gray-700 mb-2">
+                    Project Role *
+                  </label>
+                  <input
+                    type="text"
+                    value={formData.role}
+                    onChange={(e) => setFormData({ ...formData, role: e.target.value })}
+                    placeholder="e.g., Backend Developer, UI Designer"
+                    className="w-full px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-purple-500 focus:border-transparent"
+                    required
+                  />
+                </div>
+              </>
             )}
 
             {/* Name - Shown when editing or for non-managers */}
@@ -211,7 +227,7 @@ export function TeamMemberModal({ member, project, isManager, onSave, onClose }:
               type="submit"
               disabled={
                 isManager && !member
-                  ? !formData.email // Only email required for invitation
+                  ? !formData.email || !formData.role // Email + role required for invitation
                   : !formData.name || !formData.email || !formData.role || !formData.skills || formData.skills.length === 0
               }
               className="px-4 py-2 bg-purple-600 text-white rounded-lg hover:bg-purple-700 transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
