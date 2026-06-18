@@ -1,6 +1,6 @@
 import { useState } from 'react';
-import { Sparkles, AlertCircle, CheckCircle2, Zap, Loader2 } from 'lucide-react';
-import { schedulerAPI } from '../services/api-client';
+import { Sparkles, AlertCircle, CheckCircle2, Zap, Loader2, CalendarDays, Users } from 'lucide-react';
+import { schedulerAPI, type TaskAssignmentDto } from '../services/api-client';
 import { toast } from 'sonner';
 import { Project } from '../App';
 
@@ -11,31 +11,55 @@ interface AISchedulerProps {
 }
 
 export function AIScheduler({ project, onScheduleComplete, onClose }: AISchedulerProps) {
-  const [isGenerating, setIsGenerating] = useState(false);
-  const [resultMessage, setResultMessage] = useState<string | null>(null);
+  const [isPreviewing, setIsPreviewing] = useState(false);
+  const [isApplying, setIsApplying] = useState(false);
+  const [previewAssignments, setPreviewAssignments] = useState<TaskAssignmentDto[] | null>(null);
+  const [applyMessage, setApplyMessage] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
 
-  const generateSchedule = async () => {
-    setIsGenerating(true);
+  const formatDate = (value?: string) => {
+    if (!value) return 'Not scheduled';
+    const date = new Date(value);
+    return Number.isNaN(date.getTime()) ? value : date.toLocaleDateString();
+  };
+
+  const previewSchedule = async () => {
+    setIsPreviewing(true);
     setError(null);
-    setResultMessage(null);
+    setApplyMessage(null);
+    setPreviewAssignments(null);
 
     try {
-      // Call backend AI scheduler API
-      const result = await schedulerAPI.runAIScheduler(parseInt(project.id));
-
-      setResultMessage(result);
-      toast.success('Schedule generated successfully!');
-
-      // Call parent to refresh the data
-      onScheduleComplete();
+      const result = await schedulerAPI.previewSchedule(parseInt(project.id));
+      setPreviewAssignments(result);
+      toast.success('Schedule preview loaded');
     } catch (err: any) {
-      console.error('AI Scheduler error:', err);
-      const errorMessage = err.message || 'Failed to generate schedule';
+      console.error('Schedule preview error:', err);
+      const errorMessage = err.message || 'Failed to preview schedule';
       setError(errorMessage);
       toast.error(errorMessage);
     } finally {
-      setIsGenerating(false);
+      setIsPreviewing(false);
+    }
+  };
+
+  const applySchedule = async () => {
+    setIsApplying(true);
+    setError(null);
+    setApplyMessage(null);
+
+    try {
+      const result = await schedulerAPI.runAIScheduler(parseInt(project.id));
+      setApplyMessage(result || 'Schedule applied successfully.');
+      toast.success('Schedule applied successfully');
+      onScheduleComplete();
+    } catch (err: any) {
+      console.error('Schedule apply error:', err);
+      const errorMessage = err.message || 'Failed to apply schedule';
+      setError(errorMessage);
+      toast.error(errorMessage);
+    } finally {
+      setIsApplying(false);
     }
   };
 
@@ -79,46 +103,122 @@ export function AIScheduler({ project, onScheduleComplete, onClose }: AISchedule
         </ul>
       </div>
 
-      {/* Generate Button */}
+      {/* Preview Button */}
       <div className="bg-white rounded-lg p-6 border border-gray-200">
         <button
-          onClick={generateSchedule}
-          disabled={isGenerating}
+          onClick={previewSchedule}
+          disabled={isPreviewing}
           className="w-full px-6 py-3 bg-blue-600 text-white rounded-lg hover:bg-blue-700 transition-colors disabled:opacity-50 disabled:cursor-not-allowed flex items-center justify-center gap-2"
         >
-          {isGenerating ? (
+          {isPreviewing ? (
             <>
               <Loader2 className="w-5 h-5 animate-spin" />
-              Running AI Scheduler...
+              Loading Schedule Preview...
             </>
           ) : (
             <>
               <Zap className="w-5 h-5" />
-              Generate Optimized Schedule
+              Preview Schedule
             </>
           )}
         </button>
       </div>
 
-      {/* Success Message */}
-      {resultMessage && (
-        <div className="bg-green-50 border border-green-200 rounded-lg p-6">
-          <div className="flex items-start gap-3">
+      {/* Preview Results */}
+      {previewAssignments && (
+        <div className="bg-white border border-gray-200 rounded-lg overflow-hidden">
+          <div className="p-6 border-b border-gray-200 flex items-start gap-3">
             <CheckCircle2 className="w-6 h-6 text-green-600 flex-shrink-0 mt-0.5" />
-            <div className="flex-1">
-              <h3 className="text-green-900 mb-2">Scheduling Complete!</h3>
-              <p className="text-green-700 text-sm">{resultMessage}</p>
-              <p className="text-green-600 text-sm mt-2">
-                All tasks have been scheduled with optimal dates and assigned to team members. You can now view the updated timeline and assign tasks to sprints.
+            <div>
+              <h3 className="text-gray-900 mb-1">Schedule Preview</h3>
+              <p className="text-gray-600 text-sm">
+                {previewAssignments.length === 0
+                  ? 'No scheduled tasks were returned.'
+                  : `${previewAssignments.length} scheduled task${previewAssignments.length === 1 ? '' : 's'} returned.`}
               </p>
             </div>
           </div>
-          <button
-            onClick={onClose}
-            className="mt-4 w-full px-4 py-2 bg-green-600 text-white rounded-lg hover:bg-green-700 transition-colors"
-          >
-            Close & View Schedule
-          </button>
+          {previewAssignments.length > 0 && (
+            <div className="divide-y divide-gray-200">
+              {previewAssignments.map((assignment, index) => (
+                <div key={`${assignment.assignmentID ?? 'preview'}-${assignment.taskID ?? index}`} className="p-6">
+                  <div className="flex items-start justify-between gap-4 mb-3">
+                    <div>
+                      <h4 className="text-gray-900">{assignment.taskName || 'Untitled Task'}</h4>
+                      <p className="text-sm text-gray-500">
+                        Task ID {assignment.taskID ?? 'N/A'} · Assignment {assignment.assignmentID ?? 'Preview only'}
+                      </p>
+                    </div>
+                    <span className="px-2 py-1 bg-blue-50 text-blue-700 rounded text-xs">
+                      Project {assignment.projectID ?? project.id}
+                    </span>
+                  </div>
+                  <div className="flex flex-wrap gap-4 text-sm text-gray-600">
+                    <span className="flex items-center gap-1">
+                      <CalendarDays className="w-4 h-4" />
+                      {formatDate(assignment.scheduledStartDate)} - {formatDate(assignment.scheduledEndDate)}
+                    </span>
+                    <span className="flex items-center gap-1">
+                      <Users className="w-4 h-4" />
+                      {assignment.requiredMemberNum ?? 0} required
+                    </span>
+                  </div>
+                  <div className="mt-3 flex flex-wrap gap-2">
+                    {(assignment.assignedMemberNames || []).length > 0 ? (
+                      assignment.assignedMemberNames?.map((name, memberIndex) => (
+                        <span key={`${name}-${memberIndex}`} className="px-2 py-1 bg-gray-100 text-gray-700 rounded text-xs">
+                          {name}
+                        </span>
+                      ))
+                    ) : (
+                      <span className="px-2 py-1 bg-yellow-50 text-yellow-700 rounded text-xs">Unassigned</span>
+                    )}
+                    {(assignment.assignedMemberIds || []).map((memberId) => (
+                      <span key={`member-id-${memberId}`} className="px-2 py-1 bg-gray-50 text-gray-500 rounded text-xs">
+                        ID {memberId}
+                      </span>
+                    ))}
+                  </div>
+                </div>
+              ))}
+            </div>
+          )}
+          <div className="p-6 border-t border-gray-200 space-y-3">
+            {applyMessage && (
+              <div className="bg-green-50 border border-green-200 rounded-lg p-4">
+                <div className="flex items-start gap-2">
+                  <CheckCircle2 className="w-5 h-5 text-green-600 flex-shrink-0 mt-0.5" />
+                  <p className="text-green-700 text-sm">{applyMessage}</p>
+                </div>
+              </div>
+            )}
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+              <button
+                onClick={applySchedule}
+                disabled={isApplying || isPreviewing || previewAssignments.length === 0}
+                className="px-4 py-2 bg-green-600 text-white rounded-lg hover:bg-green-700 transition-colors disabled:opacity-50 disabled:cursor-not-allowed flex items-center justify-center gap-2"
+              >
+                {isApplying ? (
+                  <>
+                    <Loader2 className="w-4 h-4 animate-spin" />
+                    Applying Schedule...
+                  </>
+                ) : (
+                  <>
+                    <CheckCircle2 className="w-4 h-4" />
+                    Apply Schedule
+                  </>
+                )}
+              </button>
+              <button
+                onClick={onClose}
+                disabled={isApplying}
+                className="px-4 py-2 bg-gray-100 text-gray-700 rounded-lg hover:bg-gray-200 transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+              >
+                Close Preview
+              </button>
+            </div>
+          </div>
         </div>
       )}
 

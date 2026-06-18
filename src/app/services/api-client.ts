@@ -1,4 +1,7 @@
 // API Client for Project Management System
+
+import { set } from "date-fns";
+
 // Base URL for backend API
 const API_BASE_URL = 'http://localhost:8080';
 
@@ -22,6 +25,12 @@ export function clearAuthToken(): void {
 export function getCurrentUser() {
   const userJson = localStorage.getItem('current_user');
   return userJson ? JSON.parse(userJson) : null;
+}
+
+export function getCurrentUserId(): number | null {
+  const user = getCurrentUser();
+  const userId = Number(user?.userID ?? localStorage.getItem('userID'));
+  return Number.isFinite(userId) ? userId : null;
 }
 
 export function setCurrentUser(user: any): void {
@@ -83,8 +92,15 @@ export interface TaskDto {
   startDate?: string;
   endDate?: string;
   dependencyIds?: number[];
-  sprintID?: number;
+  sprintID?: number | null;
   storyPoints?: number;
+  assignedMemberIds?: number[];
+}
+
+export interface TaskTimelineUpdateDto {
+  startDate: string;
+  endDate: string;
+  estimatedDuration?: number;
 }
 
 export interface UserDto {
@@ -101,7 +117,10 @@ export interface AuthenticationRequest {
 }
 
 export interface AuthenticationResponse {
+  userID: number;
+  name: string;
   token: string;
+  role: 'PROJECT_MANAGER' | 'TEAM_MEMBER';
 }
 
 export interface ProjectDto {
@@ -126,7 +145,7 @@ export interface ProjectMemberDto {
 }
 
 export interface TaskAssignmentDto {
-  assignmentID?: number;
+  assignmentID?: number | null;
   taskID?: number;
   taskName?: string;
   requiredMemberNum?: number;
@@ -137,6 +156,12 @@ export interface TaskAssignmentDto {
   projectID?: number;
   validMemberCount?: boolean;
   validationError?: string;
+}
+
+export interface ManualScheduleTaskPayload {
+  assignedMemberIds: number[];
+  scheduledStartDate: string;
+  scheduledEndDate?: string;
 }
 
 export interface SprintDto {
@@ -186,6 +211,7 @@ export const authAPI = {
 
     const result = await response.json();
     setAuthToken(result.token);
+    setCurrentUser({userID: result.userID, email: data.email, role: result.role }); // Role will be determined by backend in a real implementation
     return result;
   },
 
@@ -201,6 +227,35 @@ export const authAPI = {
 export const projectAPI = {
   async getAllProjects(): Promise<ProjectDto[]> {
     return apiRequest<ProjectDto[]>('/api/v1/projects');
+  },
+
+  async getAllEnrolledProjects(): Promise<ProjectDto[]> {
+    return apiRequest<ProjectDto[]>('/api/v1/projects/enrolled');
+  },
+
+  // Returns projects where the given user is enrolled as a team member.
+  // NOTE: Backend API does not expose a dedicated endpoint in the provided spec,
+  // so we derive this list by checking each project's enrolled members.
+  async getEnrolledProjectsByEmail(email: string): Promise<ProjectDto[]> {
+    const normalizedEmail = (email || '').trim().toLowerCase();
+    if (!normalizedEmail) return [];
+
+    const projects = await apiRequest<ProjectDto[]>('/api/v1/projects/enrolled');
+    const checks = await Promise.all(
+      projects.map(async (p) => {
+        const projectId = p.projectID;
+        if (typeof projectId !== 'number') return null;
+        try {
+          const members = await apiRequest<ProjectMemberDto[]>(`/api/v1/projects/${projectId}/enrolled`);
+          const isEnrolled = members.some((m) => (m.teamMemberEmail || '').trim().toLowerCase() === normalizedEmail);
+          return isEnrolled ? p : null;
+        } catch {
+          return null;
+        }
+      }),
+    );
+
+    return checks.filter((p): p is ProjectDto => Boolean(p));
   },
 
   async getProjectById(id: number): Promise<ProjectDto> {
@@ -291,8 +346,23 @@ export const schedulerAPI = {
     });
   },
 
+  async previewSchedule(projectId: number): Promise<TaskAssignmentDto[]> {
+    return apiRequest<TaskAssignmentDto[]>(`/api/v1/scheduling/project/${projectId}/preview`);
+  },
+
   async getProjectAssignments(projectId: number): Promise<TaskAssignmentDto[]> {
     return apiRequest<TaskAssignmentDto[]>(`/api/v1/scheduling/project/${projectId}/assignments`);
+  },
+
+  async manualScheduleTask(
+    projectId: number,
+    taskId: number,
+    payload: ManualScheduleTaskPayload,
+  ): Promise<TaskAssignmentDto> {
+    return apiRequest<TaskAssignmentDto>(`/api/v1/scheduling/project/${projectId}/tasks/${taskId}/manual`, {
+      method: 'POST',
+      body: JSON.stringify(payload),
+    });
   },
 };
 
@@ -339,6 +409,10 @@ export const taskAPI = {
     return apiRequest<TaskDto[]>(`/api/v1/project/${projectId}/tasks`);
   },
 
+  async getAssignedTasks(projectId: number, teamMemberId: number): Promise<TaskDto[]> {
+    return apiRequest<TaskDto[]>(`/api/v1/project/${projectId}/tasks/assigned/${teamMemberId}`);
+  },
+
   async getTaskById(projectId: number, taskId: number): Promise<TaskDto> {
     return apiRequest<TaskDto>(`/api/v1/project/${projectId}/tasks/${taskId}`);
   },
@@ -354,6 +428,23 @@ export const taskAPI = {
     return apiRequest<TaskDto>(`/api/v1/project/${projectId}/tasks/${taskId}`, {
       method: 'PUT',
       body: JSON.stringify(data),
+    });
+  },
+
+  async updateTaskTimeline(projectId: number, taskId: number, timeline: TaskTimelineUpdateDto): Promise<TaskDto> {
+    const current = await apiRequest<TaskDto>(`/api/v1/project/${projectId}/tasks/${taskId}`);
+    const merged: TaskDto = {
+      ...current,
+      taskID: taskId,
+      projectID: projectId,
+      startDate: timeline.startDate,
+      endDate: timeline.endDate,
+      ...(typeof timeline.estimatedDuration === 'number' ? { estimatedDuration: timeline.estimatedDuration } : {}),
+    };
+
+    return apiRequest<TaskDto>(`/api/v1/project/${projectId}/tasks/${taskId}`, {
+      method: 'PUT',
+      body: JSON.stringify(merged),
     });
   },
 

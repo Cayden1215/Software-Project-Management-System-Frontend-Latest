@@ -82,6 +82,7 @@ export function TaskModal({ task, allTasks, project, isManager, onSave, onDelete
       description: formData.description || '',
       status: formData.status || 'todo',
       assignee: formData.assignee,
+      assignedMemberIds: formData.assignedMemberIds || [],
       startDate: formData.startDate,
       endDate: formData.endDate,
       estimatedDuration: formData.estimatedDuration || 1,

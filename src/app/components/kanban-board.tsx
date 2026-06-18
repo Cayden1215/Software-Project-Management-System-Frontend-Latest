@@ -34,6 +34,7 @@ export function KanbanBoard({ project, isManager, onUpdateProject }: KanbanBoard
       description: dto.description,
       status: (dto.taskStatus as Task['status']) || 'todo',
       assignee: dto.assignee,
+      assignedMemberIds: dto.assignedMemberIds || [],
       requiredSkills: dto.requiredSkills || [],
       skillIDs: dto.skillIDs || [],
       startDate: dto.startDate,
@@ -76,7 +77,7 @@ export function KanbanBoard({ project, isManager, onUpdateProject }: KanbanBoard
         .map((name) => skillIdByName[name])
         .filter((id): id is number => Number.isFinite(id));
       
-      const updatedTaskData = {
+      const updatedTaskData: TaskDto = {
         taskID: taskId,
         projectID: projectId,
         taskName: draggedTask.title,
@@ -86,11 +87,12 @@ export function KanbanBoard({ project, isManager, onUpdateProject }: KanbanBoard
         estimatedDuration: draggedTask.estimatedDuration ?? 1,
         requiredMemberNum: draggedTask.requiredMemberNum ?? 1,
         assignee: draggedTask.assignee,
-        requiredSkills: draggedTask.requiredSkills,
-        skillIds: skillIDs,
+        assignedMemberIds: draggedTask.assignedMemberIds || [],
+        requiredSkills: draggedTask.requiredSkills ?? [],
+        skillIDs,
         startDate: draggedTask.startDate,
         endDate: draggedTask.endDate,
-        dependencyIds: draggedTask.dependencies.map(d => parseInt(d)),
+        dependencyIds: draggedTask.dependencies.map((d) => parseInt(d)).filter((n) => Number.isFinite(n)),
         storyPoints: draggedTask.storyPoints,
       };
 
@@ -104,7 +106,7 @@ export function KanbanBoard({ project, isManager, onUpdateProject }: KanbanBoard
       onUpdateProject({ ...project, tasks: updatedTasks });
     } catch (error) {
       console.error('Failed to update task status:', error);
-      alert('Failed to update task status. Please try again.');
+      toast.error('Failed to update task status. Please try again.');
     }
     
     setDraggedTask(null);
@@ -135,8 +137,9 @@ export function KanbanBoard({ project, isManager, onUpdateProject }: KanbanBoard
       estimatedDuration: task.estimatedDuration ?? 1,
       requiredMemberNum: task.requiredMemberNum ?? 1,
       assignee: task.assignee,
+      assignedMemberIds: task.assignedMemberIds || [],
       requiredSkills: task.requiredSkills ?? [],
-      skillIds: skillIDs,
+      skillIDs,
       startDate: task.startDate,
       endDate: task.endDate,
       dependencyIds: task.dependencies.map((id) => parseInt(id)).filter((n) => Number.isFinite(n)),

@@ -1,4 +1,4 @@
-import { useState, useEffect } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import { User, Project, Task, Sprint, TeamMember } from '../App';
 import { ProjectWorkspace } from '../components/project-workspace';
 import { useParams, useNavigate, Navigate } from 'react-router';
@@ -75,8 +75,13 @@ export default function ProjectWorkspacePage({
   const [project, setProject] = useState<Project | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+  const projectRef = useRef<Project | null>(null);
 
-  const loadProjectDetails = async (id: number): Promise<Project> => {
+  useEffect(() => {
+    projectRef.current = project;
+  }, [project]);
+
+  const loadProjectDetails = useCallback(async (id: number): Promise<Project> => {
     const projectDto = await projectAPI.getProjectById(id);
     const baseProject = convertProjectDtoToProject(projectDto);
 
@@ -93,6 +98,7 @@ export default function ProjectWorkspacePage({
       description: dto.description,
       status: convertTaskStatus(dto.taskStatus),
       assignee: dto.assignee,
+      assignedMemberIds: dto.assignedMemberIds || [],
       requiredSkills: dto.requiredSkills || [],
       startDate: dto.startDate,
       endDate: dto.endDate,
@@ -119,6 +125,8 @@ export default function ProjectWorkspacePage({
 
     const teamMembers: TeamMember[] = projectMembers.map((m) => ({
       id: (m.projectMemberID ?? m.teamMemberID ?? '').toString(),
+      projectMemberId: m.projectMemberID,
+      teamMemberId: m.teamMemberID,
       name: m.teamMemberUsername || m.teamMemberEmail || 'Team Member',
       email: m.teamMemberEmail || '',
       role: m.projectRole || 'member',
@@ -135,7 +143,7 @@ export default function ProjectWorkspacePage({
       registeredSkills,
       members: teamMembers.map((m) => m.email).filter(Boolean),
     };
-  };
+  }, []);
 
   // Fetch project on mount
   useEffect(() => {
@@ -159,50 +167,66 @@ export default function ProjectWorkspacePage({
     };
 
     loadProject();
-  }, [projectId]);
+  }, [projectId, loadProjectDetails]);
 
-  const handleUpdateProject = async (updatedProject: Project) => {
-    const previousProject = project;
+  const handleUpdateProject = useCallback(
+    async (updatedProject: Project) => {
+      const previousProject = projectRef.current;
 
-    // Always update local state for immediate UI feedback
-    setProject(updatedProject);
+      // Always update local state for immediate UI feedback
+      setProject(updatedProject);
 
-    // Only persist "project-level" changes here. Task/sprint changes are persisted by their own APIs.
-    if (!previousProject) return;
-    const metaChanged =
-      previousProject.name !== updatedProject.name ||
-      previousProject.description !== updatedProject.description ||
-      previousProject.status !== updatedProject.status ||
-      previousProject.manager !== updatedProject.manager ||
-      previousProject.createdAt !== updatedProject.createdAt;
+      // Only persist "project-level" changes here. Task/sprint changes are persisted by their own APIs.
+      if (!previousProject) return;
+      const metaChanged =
+        previousProject.name !== updatedProject.name ||
+        previousProject.description !== updatedProject.description ||
+        previousProject.status !== updatedProject.status ||
+        previousProject.manager !== updatedProject.manager ||
+        previousProject.createdAt !== updatedProject.createdAt;
 
-    if (!metaChanged) return;
+      if (!metaChanged) return;
 
-    try {
-      const updateDto: ProjectDto = {
-        projectID: Number(updatedProject.id),
-        projectName: updatedProject.name,
-        projectDescription: updatedProject.description,
-        startDate: updatedProject.createdAt,
-        deadline: updatedProject.createdAt, // Using same date as fallback
-        projectStatus: updatedProject.status,
-        projectManagerID: Number(updatedProject.manager),
-      };
-      await projectAPI.updateProject(Number(updatedProject.id), updateDto);
-      toast.success('Project updated successfully');
-    } catch (err: any) {
-      console.error('Failed to update project:', err);
-      toast.error('Failed to update project');
-      if (projectId) {
-        const loadedProject = await loadProjectDetails(Number(projectId));
-        setProject(loadedProject);
+      try {
+        const updateDto: ProjectDto = {
+          projectID: Number(updatedProject.id),
+          projectName: updatedProject.name,
+          projectDescription: updatedProject.description,
+          startDate: updatedProject.createdAt,
+          deadline: updatedProject.createdAt, // Using same date as fallback
+          projectStatus: updatedProject.status,
+          projectManagerID: Number(updatedProject.manager),
+        };
+        await projectAPI.updateProject(Number(updatedProject.id), updateDto);
+        toast.success('Project updated successfully');
+      } catch (err: any) {
+        console.error('Failed to update project:', err);
+        toast.error('Failed to update project');
+        if (projectId) {
+          const loadedProject = await loadProjectDetails(Number(projectId));
+          setProject(loadedProject);
+        }
       }
-    }
-  };
+    },
+    [projectId, loadProjectDetails],
+  );
 
   const handleBack = () => {
     navigate('/dashboard');
   };
+
+  const isProjectManager = project ? project.manager === currentUser.id || currentUser.role === 'PROJECT_MANAGER' : false;
+  const isEnrolledMember = project ? project.teamMembers.some((m) => m.email === currentUser.email) : false;
+
+  // Team members should only access projects they are enrolled in.
+  // This hook must run on every render to keep hook order stable.
+  useEffect(() => {
+    if (loading) return;
+    if (!project) return;
+    if (!isProjectManager && currentUser.role === 'TEAM_MEMBER' && !isEnrolledMember) {
+      toast.error('You are not enrolled in this project.');
+    }
+  }, [currentUser.role, isEnrolledMember, isProjectManager, loading, project]);
 
   if (loading) {
     return (
@@ -219,8 +243,9 @@ export default function ProjectWorkspacePage({
     return <Navigate to="/dashboard" replace />;
   }
 
-  // Compare user ID instead of email - the manager field stores the projectManagerID
-  const isProjectManager = project.manager === currentUser.id || currentUser.role === 'manager';
+  if (!isProjectManager && currentUser.role === 'TEAM_MEMBER' && !isEnrolledMember) {
+    return <Navigate to="/dashboard" replace />;
+  }
 
   return (
     <ProjectWorkspace

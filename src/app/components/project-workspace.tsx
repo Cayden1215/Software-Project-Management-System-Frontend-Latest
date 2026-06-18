@@ -3,6 +3,7 @@ import { Project, User } from '../App';
 import { ArrowLeft, LayoutGrid, Calendar, Users, ClipboardList, User as UserIcon, Edit2 } from 'lucide-react';
 import { ScrumKanbanBoard } from './scrum-kanban-board';
 import { TimelineView } from './timeline-view';
+import { GanttChartView } from './gantt-chart-view';
 import { ResourceManagement } from './resource-management';
 import { TaskManagement } from './task-management';
 import { TeamMemberProfile } from './team-member-profile';
@@ -15,7 +16,7 @@ interface ProjectWorkspaceProps {
   onBack: () => void;
 }
 
-type ViewType = 'tasks' | 'kanban' | 'timeline' | 'resources' | 'profile';
+type ViewType = 'tasks' | 'kanban' | 'timeline' | 'gantt' | 'resources' | 'profile';
 
 export function ProjectWorkspace({ project, currentUser, isManager, onUpdateProject, onBack }: ProjectWorkspaceProps) {
   const [activeView, setActiveView] = useState<ViewType>(isManager ? 'tasks' : 'kanban');
@@ -120,6 +121,17 @@ export function ProjectWorkspace({ project, currentUser, isManager, onUpdateProj
               Task Management
             </button>
             <button
+              onClick={() => setActiveView('gantt')}
+              className={`px-4 py-2 rounded-lg transition-colors flex items-center gap-2 ${
+                activeView === 'gantt'
+                  ? 'bg-blue-600 text-white'
+                  : 'bg-gray-100 text-gray-700 hover:bg-gray-200'
+              }`}
+            >
+              <ClipboardList className="w-4 h-4" />
+              Gantt Chart
+            </button>
+            <button
               onClick={() => setActiveView('kanban')}
               className={`px-4 py-2 rounded-lg transition-colors flex items-center gap-2 ${
                 activeView === 'kanban'
@@ -172,44 +184,39 @@ export function ProjectWorkspace({ project, currentUser, isManager, onUpdateProj
       </div>
 
       {/* Content */}
-      <div className="max-w-7xl mx-auto px-6 py-6">
-        {activeView === 'tasks' && (
-          <TaskManagement
-            project={project}
-            isManager={isManager}
-            onUpdateProject={onUpdateProject}
-          />
-        )}
-        {activeView === 'kanban' && (
-          <ScrumKanbanBoard
-            project={project}
-            currentUser={currentUser}
-            isManager={isManager}
-            onUpdateProject={onUpdateProject}
-          />
-        )}
-        {activeView === 'timeline' && (
-          <TimelineView
-            project={project}
-            isManager={isManager}
-            onUpdateProject={onUpdateProject}
-          />
-        )}
-        {activeView === 'resources' && isManager && (
-          <ResourceManagement
-            project={project}
-            isManager={isManager}
-            onUpdateProject={onUpdateProject}
-          />
-        )}
-        {activeView === 'profile' && !isManager && (
-          <TeamMemberProfile
-            project={project}
-            currentUser={currentUser}
-            onUpdateProject={onUpdateProject}
-          />
-        )}
-      </div>
+      {activeView === 'gantt' ? (
+        <div className="max-w-7xl mx-auto px-6 py-6">
+          <GanttChartView project={project} isManager={isManager} onUpdateProject={onUpdateProject} />
+        </div>
+      ) : (
+        <div className="max-w-7xl mx-auto px-6 py-6 space-y-6">
+          {activeView === 'tasks' && (
+            <TaskManagement
+              project={project}
+              currentUser={currentUser}
+              isManager={isManager}
+              onUpdateProject={onUpdateProject}
+            />
+          )}
+          {activeView === 'kanban' && (
+            <ScrumKanbanBoard
+              project={project}
+              currentUser={currentUser}
+              isManager={isManager}
+              onUpdateProject={onUpdateProject}
+            />
+          )}
+          {activeView === 'timeline' && (
+            <TimelineView project={project} isManager={isManager} onUpdateProject={onUpdateProject} />
+          )}
+          {activeView === 'resources' && isManager && (
+            <ResourceManagement project={project} isManager={isManager} onUpdateProject={onUpdateProject} />
+          )}
+          {activeView === 'profile' && !isManager && (
+            <TeamMemberProfile project={project} currentUser={currentUser} onUpdateProject={onUpdateProject} />
+          )}
+        </div>
+      )}
     </div>
   );
 }

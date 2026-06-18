@@ -31,10 +31,10 @@ export function LoginForm({ onLogin, onSwitchToSignup }: LoginFormProps) {
       // Now we need to get user info from the token or make another API call
       // For now, create a user object from email
       const user: User = {
-        id: email, // Using email as ID temporarily
-        name: email.split('@')[0], // Extract name from email
+        userID: response.userID, // Using email as ID temporarily
+        name: response.name, // Extract name from email
         email,
-        role: 'manager', // Will be determined by backend
+        role: response.role, // Will be determined by backend
       };
 
       setCurrentUser(user);

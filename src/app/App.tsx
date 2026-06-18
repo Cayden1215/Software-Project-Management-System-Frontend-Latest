@@ -5,14 +5,16 @@ import { Toaster } from './components/ui/sonner';
 import { getCurrentUser, clearAuthToken, getAuthToken } from './services/api-client';
 
 export interface User {
-  id: string;
+  userID: number;
   name: string;
   email: string;
-  role: 'admin' | 'manager' | 'member';
+  role: 'PROJECT_MANAGER' | 'TEAM_MEMBER';
 }
 
 export interface TeamMember {
   id: string;
+  projectMemberId?: number;
+  teamMemberId?: number;
   name: string;
   email: string;
   role: string;
@@ -35,6 +37,7 @@ export interface Task {
   description: string;
   status: 'todo' | 'in-progress' | 'review' | 'done';
   assignee?: string;
+  assignedMemberIds?: number[];
   requiredSkills: string[];
   skillIDs?: number[];
   startDate?: string;

@@ -3,7 +3,7 @@ import { Project, Task, Sprint, User } from '../App';
 import { Plus, GripVertical, Clock, AlertCircle, CheckCircle2, Calendar, Target, ChevronDown, Edit2, Search, SlidersHorizontal, X } from 'lucide-react';
 import { TaskModal } from './task-modal';
 import { SprintModal } from './sprint-modal';
-import { skillAPI, sprintAPI, taskAPI, TaskDto } from '../services/api-client';
+import { getCurrentUserId, skillAPI, sprintAPI, taskAPI, TaskDto } from '../services/api-client';
 import { toast } from 'sonner';
 
 interface ScrumKanbanBoardProps {
@@ -44,6 +44,7 @@ export function ScrumKanbanBoard({ project, currentUser, isManager, onUpdateProj
       description: dto.description,
       status: (dto.taskStatus as Task['status']) || 'todo',
       assignee: dto.assignee,
+      assignedMemberIds: dto.assignedMemberIds || [],
       requiredSkills: dto.requiredSkills || [],
       skillIDs: dto.skillIDs || [],
       startDate: dto.startDate,
@@ -81,12 +82,21 @@ export function ScrumKanbanBoard({ project, currentUser, isManager, onUpdateProj
     e.preventDefault();
   };
 
+  const canUpdateTask = (task: Task) => {
+    if (isManager) return true;
+    const assignedMemberIds = task.assignedMemberIds || [];
+    const currentUserId = getCurrentUserId();
+
+    if (currentUserId !== null && assignedMemberIds.includes(currentUserId)) return true;
+    return false;
+  };
+
   const handleDrop = async (status: Task['status']) => {
     if (!draggedTask) return;
 
-    // Permission check: team members can only update their own tasks
-    if (!isManager && draggedTask.assignee !== currentUser.email) {
-      alert('You can only update the status of tasks assigned to you.');
+    // Permission check: team members can only update assigned tasks.
+    if (!canUpdateTask(draggedTask)) {
+      toast.error('You can only update the status of tasks assigned to you.');
       setDraggedTask(null);
       return;
     }
@@ -108,7 +118,7 @@ export function ScrumKanbanBoard({ project, currentUser, isManager, onUpdateProj
         .map((name) => skillIdByName[name])
         .filter((id): id is number => Number.isFinite(id));
 
-      const updatedTaskData = {
+      const updatedTaskData: TaskDto = {
         taskID: taskId,
         projectID: projectId,
         taskName: draggedTask.title,
@@ -118,11 +128,12 @@ export function ScrumKanbanBoard({ project, currentUser, isManager, onUpdateProj
         estimatedDuration: draggedTask.estimatedDuration ?? 1,
         requiredMemberNum: draggedTask.requiredMemberNum ?? 1,
         assignee: draggedTask.assignee,
-        requiredSkills: draggedTask.requiredSkills,
-        skillIds: skillIDs,
+        assignedMemberIds: draggedTask.assignedMemberIds || [],
+        requiredSkills: draggedTask.requiredSkills ?? [],
+        skillIDs,
         startDate: draggedTask.startDate,
         endDate: draggedTask.endDate,
-        dependencyIds: draggedTask.dependencies.map(d => parseInt(d)),
+        dependencyIds: draggedTask.dependencies.map((d) => parseInt(d)).filter((n) => Number.isFinite(n)),
         sprintID: draggedTask.sprintId ? parseInt(draggedTask.sprintId) : undefined,
         storyPoints: draggedTask.storyPoints,
       };
@@ -137,7 +148,7 @@ export function ScrumKanbanBoard({ project, currentUser, isManager, onUpdateProj
       onUpdateProject({ ...project, tasks: updatedTasks });
     } catch (error) {
       console.error('Failed to update task status:', error);
-      alert('Failed to update task status. Please try again.');
+      toast.error('Failed to update task status. Please try again.');
     } finally {
       setIsLoading(false);
     }
@@ -146,6 +157,11 @@ export function ScrumKanbanBoard({ project, currentUser, isManager, onUpdateProj
   };
 
   const handleSaveTask = async (task: Task) => {
+    if (editingTask && !canUpdateTask(editingTask)) {
+      toast.error('You can only update tasks assigned to you.');
+      return;
+    }
+
     try {
       setIsLoading(true);
       const projectId = parseInt(project.id);
@@ -172,6 +188,7 @@ export function ScrumKanbanBoard({ project, currentUser, isManager, onUpdateProj
         estimatedDuration: task.estimatedDuration ?? 1,
         requiredMemberNum: task.requiredMemberNum ?? 1,
         assignee: task.assignee,
+        assignedMemberIds: task.assignedMemberIds || [],
         requiredSkills: task.requiredSkills ?? [],
         skillIDs: skillIDs,
         startDate: task.startDate,
@@ -223,8 +240,8 @@ export function ScrumKanbanBoard({ project, currentUser, isManager, onUpdateProj
   };
 
   const handleEditTask = (task: Task) => {
-    // Only managers or assigned team members can view task details
-    if (!isManager && task.assignee !== currentUser.id) {
+    // Only managers or assigned team members can update task details.
+    if (!canUpdateTask(task)) {
       return;
     }
     setEditingTask(task);
@@ -309,6 +326,7 @@ export function ScrumKanbanBoard({ project, currentUser, isManager, onUpdateProj
           estimatedDuration: task.estimatedDuration ?? 1,
           requiredMemberNum: task.requiredMemberNum ?? 1,
           assignee: task.assignee,
+          assignedMemberIds: task.assignedMemberIds || [],
           requiredSkills: task.requiredSkills ?? [],
           skillIDs: skillIDs,
           startDate: task.startDate,
@@ -379,17 +397,67 @@ export function ScrumKanbanBoard({ project, currentUser, isManager, onUpdateProj
       }
     };
 
-    const handleRemoveFromSprint = (taskId: string) => {
-      const updatedTasks = project.tasks.map(task =>
-        task.id === taskId ? { ...task, sprintId: undefined } : task
-      );
+    const handleRemoveFromSprint = async (taskId: string) => {
+      try {
+        setIsLoading(true);
+        const taskID = parseInt(taskId);
+        const projectID = parseInt(project.id);
 
-      const updatedSprints = project.sprints.map(sprint => ({
-        ...sprint,
-        taskIds: sprint.taskIds.filter(id => id !== taskId),
-      }));
+        const task = project.tasks.find(t => t.id === taskId);
 
-      onUpdateProject({ ...project, tasks: updatedTasks, sprints: updatedSprints });
+        if (task != null) {
+          const skillDtos = await skillAPI.getProjectSkills(projectID).catch(() => []);
+          const skillIdByName: Record<string, number> = {};
+          for (const s of skillDtos) {
+            if (s.skillName && typeof s.skillID === 'number') {
+              skillIdByName[s.skillName] = s.skillID;
+            }
+          }
+          const skillIDs = (task.requiredSkills ?? [])
+            .map((name) => skillIdByName[name])
+            .filter((id): id is number => Number.isFinite(id));
+
+          const taskDto: TaskDto = {
+            taskID: taskID,
+            taskName: task.title,
+            projectID: projectID,
+            description: task.description,
+            taskStatus: task.status,
+            priority: task.priority,
+            estimatedDuration: task.estimatedDuration ?? 1,
+            requiredMemberNum: task.requiredMemberNum ?? 1,
+            assignee: task.assignee,
+            assignedMemberIds: task.assignedMemberIds || [],
+            requiredSkills: task.requiredSkills ?? [],
+            skillIDs: skillIDs,
+            startDate: task.startDate,
+            endDate: task.endDate,
+            dependencyIds: task.dependencies.map(id => parseInt(id)),
+            sprintID: null,
+            storyPoints: task.storyPoints ?? 0,
+          };
+
+          // Update task's sprint via API (remove from sprint)
+          await taskAPI.updateTask(projectID, taskID, taskDto);
+        }
+
+        const updatedTasks = project.tasks.map(task =>
+          task.id === taskId ? { ...task, sprintId: undefined } : task
+        );
+
+        const updatedSprints = project.sprints.map(sprint => ({
+          ...sprint,
+          taskIds: sprint.taskIds.filter(id => id !== taskId),
+        }));
+
+        onUpdateProject({ ...project, tasks: updatedTasks, sprints: updatedSprints });
+        toast.success('Task removed from sprint');
+      } catch (error) {
+        console.error('Failed to remove task from sprint:', error);
+        toast.error('Failed to remove task from sprint. Please try again.');
+      } finally {
+        setIsLoading(false);
+      }
     };
 
     const getTasksByStatus = (status: Task['status']) => {
@@ -629,9 +697,9 @@ export function ScrumKanbanBoard({ project, currentUser, isManager, onUpdateProj
             task={editingTask}
             allTasks={project.tasks}
             project={project}
-            isManager={isManager}
+            isManager={isManager || (editingTask ? canUpdateTask(editingTask) : false)}
             onSave={handleSaveTask}
-            onDelete={editingTask ? handleDeleteTask : undefined}
+            onDelete={editingTask && isManager ? handleDeleteTask : undefined}
             onClose={() => {
               setShowTaskModal(false);
               setEditingTask(null);
@@ -710,11 +778,16 @@ export function ScrumKanbanBoard({ project, currentUser, isManager, onUpdateProj
 
     const assignedMember = project.teamMembers.find(m => m.email === task.assignee);
 
+    const currentUserId = getCurrentUserId();
+    const assignedMemberIds = task.assignedMemberIds || [];
+    const isAssignedById =
+      currentUserId !== null && assignedMemberIds.includes(currentUserId);
+
     // Check if this task is assigned to the current user
-    const isMyTask = task.assignee === currentUser.email;
+    const isMyTask = isAssignedById;
 
     // Check if current user can drag this task
-    const canDrag = isManager || task.assignee === currentUser.email;
+    const canDrag = isManager || isMyTask;
 
     return (
       <div

@@ -1,7 +1,7 @@
-import { useState } from 'react';
-import { Project, User } from '../App';
+import { useEffect, useState } from 'react';
+import { Project, Task, User } from '../App';
 import { UserIcon, Award, Mail, Briefcase, Edit2, Save, X } from 'lucide-react';
-import { projectMemberSkillAPI, skillAPI } from '../services/api-client';
+import { getCurrentUserId, projectMemberSkillAPI, skillAPI, taskAPI, TaskDto } from '../services/api-client';
 import { toast } from 'sonner';
 
 interface TeamMemberProfileProps {
@@ -10,9 +10,58 @@ interface TeamMemberProfileProps {
   onUpdateProject: (project: Project) => void;
 }
 
+function convertTaskStatus(status: string | undefined): Task['status'] {
+  switch ((status || '').toLowerCase()) {
+    case 'done':
+      return 'done';
+    case 'in-progress':
+    case 'inprogress':
+      return 'in-progress';
+    case 'review':
+      return 'review';
+    default:
+      return 'todo';
+  }
+}
+
+function convertTaskPriority(priority: string | undefined): Task['priority'] {
+  switch ((priority || '').toLowerCase()) {
+    case 'low':
+      return 'low';
+    case 'high':
+      return 'high';
+    default:
+      return 'medium';
+  }
+}
+
+function convertTaskDtoToTask(dto: TaskDto): Task {
+  return {
+    id: dto.taskID?.toString() || '',
+    title: dto.taskName,
+    description: dto.description,
+    status: convertTaskStatus(dto.taskStatus),
+    assignee: dto.assignee,
+    assignedMemberIds: dto.assignedMemberIds || [],
+    requiredSkills: dto.requiredSkills || [],
+    skillIDs: dto.skillIDs || [],
+    startDate: dto.startDate,
+    endDate: dto.endDate,
+    estimatedDuration: dto.estimatedDuration || 0,
+    requiredMemberNum: dto.requiredMemberNum ?? 1,
+    dependencies: (dto.dependencyIds || []).map((depId) => depId.toString()),
+    priority: convertTaskPriority(dto.priority),
+    sprintId: dto.sprintID?.toString(),
+    storyPoints: dto.storyPoints,
+  };
+}
+
 export function TeamMemberProfile({ project, currentUser, onUpdateProject }: TeamMemberProfileProps) {
   const [isEditing, setIsEditing] = useState(false);
   const [isBusy, setIsBusy] = useState(false);
+  const [assignedTasks, setAssignedTasks] = useState<Task[]>([]);
+  const [tasksLoading, setTasksLoading] = useState(false);
+  const [tasksError, setTasksError] = useState<string | null>(null);
   
   const currentMember = project.teamMembers.find(tm => tm.email === currentUser.email);
   
@@ -92,6 +141,44 @@ export function TeamMemberProfile({ project, currentUser, onUpdateProject }: Tea
     }
   };
 
+  useEffect(() => {
+    if (currentUser.role !== 'TEAM_MEMBER') return;
+
+    const projectId = Number(project.id);
+    const teamMemberId = getCurrentUserId() ?? currentUser.userID;
+
+    if (!Number.isFinite(projectId) || projectId <= 0 || !Number.isFinite(teamMemberId) || teamMemberId <= 0) {
+      setAssignedTasks([]);
+      setTasksError('Unable to load assigned tasks because the user or project ID is missing.');
+      return;
+    }
+
+    let isMounted = true;
+
+    const loadAssignedTasks = async () => {
+      try {
+        setTasksLoading(true);
+        setTasksError(null);
+        const taskDtos = await taskAPI.getAssignedTasks(projectId, teamMemberId);
+        if (!isMounted) return;
+        setAssignedTasks(taskDtos.map(convertTaskDtoToTask));
+      } catch (error: any) {
+        if (!isMounted) return;
+        console.error('Failed to load assigned tasks:', error);
+        setAssignedTasks([]);
+        setTasksError(error?.message || 'Failed to load assigned tasks');
+      } finally {
+        if (isMounted) setTasksLoading(false);
+      }
+    };
+
+    loadAssignedTasks();
+
+    return () => {
+      isMounted = false;
+    };
+  }, [currentUser.role, currentUser.userID, project.id]);
+
   if (!currentMember) {
     return (
       <div className="bg-white rounded-lg p-12 text-center border border-gray-200">
@@ -104,8 +191,11 @@ export function TeamMemberProfile({ project, currentUser, onUpdateProject }: Tea
     );
   }
 
-  // Get tasks assigned to this user
-  const myTasks = project.tasks.filter(task => task.assignee === currentUser.email);
+  const fallbackTasks = project.tasks.filter((task) => {
+    const localUserId = getCurrentUserId() ?? currentUser.userID;
+    return task.assignee === currentUser.email || (Number.isFinite(localUserId) && (task.assignedMemberIds || []).includes(localUserId));
+  });
+  const myTasks = currentUser.role === 'TEAM_MEMBER' ? assignedTasks : fallbackTasks;
   const completedTasks = myTasks.filter(task => task.status === 'done');
 
   return (
@@ -330,7 +420,17 @@ export function TeamMemberProfile({ project, currentUser, onUpdateProject }: Tea
       <div className="bg-white rounded-lg p-6 border border-gray-200">
         <h3 className="text-gray-900 mb-4">My Assigned Tasks</h3>
         
-        {myTasks.length === 0 ? (
+        {tasksLoading ? (
+          <div className="text-center py-8">
+            <Briefcase className="w-12 h-12 mx-auto mb-3 text-gray-400" />
+            <p className="text-gray-600">Loading assigned tasks...</p>
+          </div>
+        ) : tasksError ? (
+          <div className="text-center py-8">
+            <Briefcase className="w-12 h-12 mx-auto mb-3 text-gray-400" />
+            <p className="text-red-600">{tasksError}</p>
+          </div>
+        ) : myTasks.length === 0 ? (
           <div className="text-center py-8">
             <Briefcase className="w-12 h-12 mx-auto mb-3 text-gray-400" />
             <p className="text-gray-600">

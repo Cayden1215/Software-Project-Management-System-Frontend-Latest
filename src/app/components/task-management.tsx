@@ -1,16 +1,17 @@
 import { useState, useEffect } from 'react';
-import { Project, Task } from '../App';
+import { Project, Task, User } from '../App';
 import { Plus, Search, Filter, Clock, Users, AlertCircle, CheckCircle2, Edit2, Trash2 } from 'lucide-react';
 import { TaskModal } from './task-modal';
-import { skillAPI, taskAPI, TaskDto } from '../services/api-client';
+import { getCurrentUserId, skillAPI, taskAPI, TaskDto } from '../services/api-client';
 
 interface TaskManagementProps {
   project: Project;
+  currentUser: User;
   isManager: boolean;
   onUpdateProject: (project: Project) => void;
 }
 
-export function TaskManagement({ project, isManager, onUpdateProject }: TaskManagementProps) {
+export function TaskManagement({ project, currentUser, isManager, onUpdateProject }: TaskManagementProps) {
   const [tasks, setTasks] = useState<Task[]>([]);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -36,6 +37,7 @@ export function TaskManagement({ project, isManager, onUpdateProject }: TaskMana
         description: dto.description,
         status: (dto.taskStatus as Task['status']) || 'todo',
         assignee: dto.assignee,
+        assignedMemberIds: dto.assignedMemberIds || [],
         requiredSkills: dto.requiredSkills || [],
         skillIDs: dto.skillIDs || [],
         startDate: dto.startDate,
@@ -65,6 +67,11 @@ export function TaskManagement({ project, isManager, onUpdateProject }: TaskMana
   }, [project.id]);
 
   const handleSaveTask = async (task: Task) => {
+    if (editingTask && !canUpdateTask(editingTask)) {
+      setError('You can only update tasks assigned to you.');
+      return;
+    }
+
     try {
       setLoading(true);
       setError(null);
@@ -91,6 +98,7 @@ export function TaskManagement({ project, isManager, onUpdateProject }: TaskMana
         estimatedDuration: task.estimatedDuration ?? 1,
         requiredMemberNum: task.requiredMemberNum ?? 1,
         assignee: task.assignee,
+        assignedMemberIds: task.assignedMemberIds || [],
         requiredSkills: task.requiredSkills ?? [],
         skillIDs: skillIds,
         startDate: task.startDate,
@@ -142,8 +150,18 @@ export function TaskManagement({ project, isManager, onUpdateProject }: TaskMana
   };
 
   const handleEditTask = (task: Task) => {
+    if (!canUpdateTask(task)) return;
     setEditingTask(task);
     setShowTaskModal(true);
+  };
+
+  const canUpdateTask = (task: Task) => {
+    if (isManager) return true;
+    const assignedMemberIds = task.assignedMemberIds || [];
+    const currentUserId = getCurrentUserId();
+
+    if (currentUserId !== null && assignedMemberIds.includes(currentUserId)) return true;
+    return Boolean(task.assignee && task.assignee === currentUser.email);
   };
 
   const getPriorityColor = (priority: Task['priority']) => {
@@ -465,7 +483,7 @@ export function TaskManagement({ project, isManager, onUpdateProject }: TaskMana
                       )}
                     </div>
 
-                    {isManager && (
+                    {canUpdateTask(task) && (
                       <div className="flex items-center gap-2 ml-4">
                         <button
                           onClick={() => handleEditTask(task)}
@@ -475,18 +493,20 @@ export function TaskManagement({ project, isManager, onUpdateProject }: TaskMana
                         >
                           <Edit2 className="w-4 h-4 text-gray-600" />
                         </button>
-                        <button
-                          onClick={() => {
-                            if (confirm(`Are you sure you want to delete "${task.title}"?`)) {
-                              handleDeleteTask(task.id);
-                            }
-                          }}
-                          disabled={loading}
-                          className="p-2 hover:bg-red-50 rounded-lg transition-colors disabled:opacity-50"
-                          title="Delete task"
-                        >
-                          <Trash2 className="w-4 h-4 text-red-600" />
-                        </button>
+                        {isManager && (
+                          <button
+                            onClick={() => {
+                              if (confirm(`Are you sure you want to delete "${task.title}"?`)) {
+                                handleDeleteTask(task.id);
+                              }
+                            }}
+                            disabled={loading}
+                            className="p-2 hover:bg-red-50 rounded-lg transition-colors disabled:opacity-50"
+                            title="Delete task"
+                          >
+                            <Trash2 className="w-4 h-4 text-red-600" />
+                          </button>
+                        )}
                       </div>
                     )}
                   </div>
@@ -502,9 +522,9 @@ export function TaskManagement({ project, isManager, onUpdateProject }: TaskMana
           task={editingTask}
           allTasks={tasks}
           project={project}
-          isManager={isManager}
+          isManager={isManager || (editingTask ? canUpdateTask(editingTask) : false)}
           onSave={handleSaveTask}
-          onDelete={editingTask ? handleDeleteTask : undefined}
+          onDelete={editingTask && isManager ? handleDeleteTask : undefined}
           onClose={() => {
             setShowTaskModal(false);
             setEditingTask(null);

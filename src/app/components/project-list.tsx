@@ -19,7 +19,7 @@ export function ProjectList({
   const [showCreateModal, setShowCreateModal] = useState(false);
   const navigate = useNavigate();
 
-  const isManager = currentUser.role === 'manager';
+  const isManager = currentUser.role === 'PROJECT_MANAGER';
 
   // Fetch projects on mount
   useEffect(() => {
@@ -29,7 +29,9 @@ export function ProjectList({
   const loadProjects = async () => {
     try {
       setLoading(true);
-      const fetchedProjects = await projectAPI.getAllProjects();
+      const fetchedProjects = isManager
+        ? await projectAPI.getAllProjects()
+        : await projectAPI.getAllEnrolledProjects();
       setProjects(fetchedProjects);
     } catch (error: any) {
       console.error('Failed to load projects:', error);
@@ -67,7 +69,7 @@ export function ProjectList({
   };
 
   // For managers: show projects they manage
-  // For members: show all projects (they'll need to enroll via project manager)
+  // For members: show enrolled projects
   const myProjects = projects;
 
   if (loading) {
@@ -128,7 +130,7 @@ export function ProjectList({
         <div className="mb-12">
           <div className="flex items-center justify-between mb-4">
             <h2 className="text-gray-900">
-              {isManager ? 'My Projects' : 'Available Projects'}
+              {isManager ? 'My Projects' : 'My Enrolled Projects'}
             </h2>
             {isManager && (
               <button

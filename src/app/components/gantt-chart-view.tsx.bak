@@ -1,0 +1,453 @@
+import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { Project, Task } from '../App';
+import { taskAPI } from '../services/api-client';
+import { toast } from 'sonner';
+import { Gantt, Willow } from '@svar-ui/react-gantt';
+
+interface GanttChartViewProps {
+  project: Project;
+  isManager: boolean;
+  onUpdateProject: (project: Project) => void;
+}
+
+class GanttErrorBoundary extends React.Component<
+  { onReset?: () => void; children: React.ReactNode },
+  { hasError: boolean; error?: unknown }
+> {
+  static getDerivedStateFromError(error: unknown) {
+    return { hasError: true, error };
+  }
+
+  constructor(props: { onReset?: () => void; children: React.ReactNode }) {
+    super(props);
+    this.state = { hasError: false, error: undefined };
+  }
+
+  componentDidCatch(error: unknown) {
+    console.error('Gantt crashed:', error);
+  }
+
+  private handleReset = () => {
+    this.setState({ hasError: false, error: undefined });
+    this.props.onReset?.();
+  };
+
+  render() {
+    if (!this.state.hasError) return this.props.children;
+
+    return (
+      <div className="h-full w-full flex flex-col items-center justify-center gap-3 p-6 text-center">
+        <div className="text-sm text-gray-700">
+          The Gantt chart hit a rendering error. Try reloading the chart.
+        </div>
+        <button
+          type="button"
+          className="px-3 py-2 rounded-md bg-blue-600 text-white text-sm hover:bg-blue-700"
+          onClick={this.handleReset}
+        >
+          Reload Gantt
+        </button>
+      </div>
+    );
+  }
+}
+
+type GanttTask = {
+  id: string | number;
+  text: string;
+  start: Date;
+  end?: Date;
+  duration?: number;
+  progress?: number;
+  parent?: string | number;
+  type?: 'task' | 'summary' | 'milestone';
+  lazy?: boolean;
+};
+
+type GanttLink = {
+  id: string | number;
+  source: string | number;
+  target: string | number;
+  type: string;
+};
+
+const parseIsoDate = (value?: string): Date | null => {
+  if (!value) return null;
+  const parsed = new Date(value);
+  return Number.isNaN(parsed.getTime()) ? null : parsed;
+};
+
+const toIsoDate = (date: Date): string => {
+  return date.toISOString().split('T')[0] || '';
+};
+
+const clampDurationDays = (value: number): number => {
+  if (!Number.isFinite(value)) return 1;
+  return Math.max(1, Math.round(value));
+};
+
+const convertTaskStatus = (status: string | undefined): Task['status'] => {
+  switch ((status || '').toLowerCase()) {
+    case 'todo':
+      return 'todo';
+    case 'in-progress':
+    case 'inprogress':
+      return 'in-progress';
+    case 'review':
+      return 'review';
+    case 'done':
+      return 'done';
+    default:
+      return 'todo';
+  }
+};
+
+const convertTaskPriority = (priority: string | undefined): Task['priority'] => {
+  switch ((priority || '').toLowerCase()) {
+    case 'low':
+      return 'low';
+    case 'high':
+      return 'high';
+    default:
+      return 'medium';
+  }
+};
+
+const areTasksEqualForGanttRefresh = (a: Task[], b: Task[]): boolean => {
+  if (a === b) return true;
+  if (a.length !== b.length) return false;
+  for (let i = 0; i < a.length; i++) {
+    const at = a[i];
+    const bt = b[i];
+    if (at.id !== bt.id) return false;
+    if (at.title !== bt.title) return false;
+    if (at.description !== bt.description) return false;
+    if (at.status !== bt.status) return false;
+    if (at.assignee !== bt.assignee) return false;
+    if (at.startDate !== bt.startDate) return false;
+    if (at.endDate !== bt.endDate) return false;
+    if ((at.estimatedDuration || 0) !== (bt.estimatedDuration || 0)) return false;
+    if ((at.requiredMemberNum || 0) !== (bt.requiredMemberNum || 0)) return false;
+    if ((at.sprintId || '') !== (bt.sprintId || '')) return false;
+
+    const adeps = at.dependencies || [];
+    const bdeps = bt.dependencies || [];
+    if (adeps.length !== bdeps.length) return false;
+    for (let j = 0; j < adeps.length; j++) if (adeps[j] !== bdeps[j]) return false;
+  }
+  return true;
+};
+
+export function GanttChartView({ project, isManager, onUpdateProject }: GanttChartViewProps) {
+  const [saving, setSaving] = useState(false);
+  const savingRef = useRef(false);
+  const projectRef = useRef(project);
+  const ganttApiRef = useRef<any>(null);
+  const [ganttKey, setGanttKey] = useState(0);
+
+  useEffect(() => {
+    projectRef.current = project;
+  }, [project]);
+
+  const refreshProjectTasks = useCallback(async () => {
+    const projectId = Number(projectRef.current.id);
+    if (!Number.isFinite(projectId) || projectId <= 0) return;
+
+    const taskDtos = await taskAPI.getProjectTasks(projectId);
+    const convertedTasks: Task[] = taskDtos.map((dto) => ({
+      id: dto.taskID?.toString() || '',
+      title: dto.taskName,
+      description: dto.description,
+      status: convertTaskStatus(dto.taskStatus),
+      assignee: dto.assignee,
+      requiredSkills: dto.requiredSkills || [],
+      skillIDs: dto.skillIDs || [],
+      startDate: dto.startDate,
+      endDate: dto.endDate,
+      estimatedDuration: dto.estimatedDuration || 0,
+      requiredMemberNum: dto.requiredMemberNum ?? 1,
+      dependencies: (dto.dependencyIds || []).map((depId) => depId.toString()),
+      priority: convertTaskPriority(dto.priority),
+      sprintId: dto.sprintID?.toString(),
+      storyPoints: dto.storyPoints,
+    }));
+
+    if (areTasksEqualForGanttRefresh(projectRef.current.tasks, convertedTasks)) return;
+    onUpdateProject({ ...projectRef.current, tasks: convertedTasks });
+  }, [onUpdateProject]);
+
+  useEffect(() => {
+    // Ensure we start from backend truth (important if tasks were edited elsewhere)
+    refreshProjectTasks().catch((err: any) => {
+      console.error('Failed to load project tasks for Gantt:', err);
+      toast.error(err?.message || 'Failed to load project tasks');
+    });
+  }, [project.id, refreshProjectTasks]);
+
+  const { ganttTasks, ganttLinks } = useMemo(() => {
+    const dayMs = 1000 * 60 * 60 * 24;
+    const normalizeDay = (date: Date): Date => new Date(Date.UTC(date.getUTCFullYear(), date.getUTCMonth(), date.getUTCDate()));
+
+    const tasks: GanttTask[] = project.tasks
+      .map((t) => {
+        const idNum = Number(t.id);
+        if (!Number.isFinite(idNum) || idNum <= 0) return null;
+
+        const fallbackStart = parseIsoDate(project.createdAt) ?? new Date();
+        const start = normalizeDay(parseIsoDate(t.startDate) ?? fallbackStart);
+        const end =
+          parseIsoDate(t.endDate) ??
+          (() => {
+            const computed = new Date(start);
+            computed.setDate(computed.getDate() + clampDurationDays(t.estimatedDuration || 1));
+            return computed;
+          })();
+
+        if (Number.isNaN(start.getTime()) || Number.isNaN(end.getTime())) return null;
+
+        const duration = clampDurationDays(Math.ceil((end.getTime() - start.getTime()) / dayMs));
+
+        return {
+          id: idNum,
+          text: t.title,
+          start,
+          end,
+          duration,
+          progress: 0,
+          parent: 0,
+          type: 'task',
+          lazy: false,
+        };
+      })
+      .filter(Boolean) as GanttTask[];
+
+    const links: GanttLink[] = [];
+    let linkId = 1;
+    for (const t of project.tasks) {
+      const target = Number(t.id);
+      if (!Number.isFinite(target) || target <= 0) continue;
+      for (const depId of t.dependencies || []) {
+        const source = Number(depId);
+        if (!Number.isFinite(source) || source <= 0) continue;
+        links.push({ id: linkId++, source, target, type: 'e2s' });
+      }
+    }
+
+    return { ganttTasks: tasks, ganttLinks: links };
+  }, [project.createdAt, project.tasks]);
+
+  const init = useCallback(
+    (api: any) => {
+      // `init` may be called multiple times by the Gantt component; avoid registering handlers repeatedly.
+      if (ganttApiRef.current === api) return;
+      ganttApiRef.current = api;
+
+      api.intercept?.('add-task', (ev: any) => {
+        if (!isManager) return false;
+
+        const projectId = Number(projectRef.current.id);
+        if (!Number.isFinite(projectId) || projectId <= 0) return false;
+        if (savingRef.current) return false;
+
+        try {
+          const textRaw = ev?.task?.text;
+          const text = typeof textRaw === 'string' && textRaw.trim().length > 0 ? textRaw.trim() : 'New Task';
+          const start = new Date();
+          const duration = 1;
+          const startDate = toIsoDate(start);
+          const end = new Date(start);
+          end.setDate(end.getDate() + duration);
+          const endDate = toIsoDate(end);
+
+          savingRef.current = true;
+          setSaving(true);
+
+          void (async () => {
+            try {
+              await taskAPI.createTask(projectId, {
+                taskName: text,
+                description: '',
+                taskStatus: 'todo',
+                priority: 'medium',
+                estimatedDuration: duration,
+                requiredMemberNum: 1,
+                requiredSkills: [],
+                skillIDs: [],
+                startDate,
+                endDate,
+                dependencyIds: [],
+              });
+              await refreshProjectTasks();
+              toast.success('Task added');
+            } catch (err: any) {
+              console.error('Failed to add task from Gantt:', err);
+              toast.error(err?.message || 'Failed to add task');
+            } finally {
+              savingRef.current = false;
+              setSaving(false);
+            }
+          })();
+        } catch (err: any) {
+          console.error('Failed to handle add-task safely:', err);
+          toast.error(err?.message || 'Failed to add task');
+          savingRef.current = false;
+          setSaving(false);
+        }
+
+        // Prevent the default internal "partial task" insertion that can crash rendering.
+        return false;
+      });
+
+      api.on('add-link', async (ev: any) => {
+        if (!isManager) return;
+
+        const projectId = Number(projectRef.current.id);
+        const source = Number(ev?.link?.source);
+        const target = Number(ev?.link?.target);
+        if (!Number.isFinite(projectId) || projectId <= 0) return;
+        if (!Number.isFinite(source) || source <= 0) return;
+        if (!Number.isFinite(target) || target <= 0) return;
+
+        const existingTarget = projectRef.current.tasks.find((t) => t.id === String(target));
+        if (existingTarget && (existingTarget.dependencies || []).includes(String(source))) return;
+
+        if (savingRef.current) return;
+        savingRef.current = true;
+        setSaving(true);
+
+        try {
+          const current = await taskAPI.getTaskById(projectId, target);
+          const deps = Array.from(new Set([...(current.dependencyIds || []), source]));
+          await taskAPI.updateTask(projectId, target, {
+            ...current,
+            taskID: target,
+            projectID: projectId,
+            dependencyIds: deps,
+          });
+          await refreshProjectTasks();
+          toast.success('Dependency saved');
+        } catch (err: any) {
+          console.error('Failed to persist dependency change:', err);
+          toast.error(err?.message || 'Failed to save dependency change');
+        } finally {
+          savingRef.current = false;
+          setSaving(false);
+        }
+      });
+
+      api.on('update-task', async (ev: any) => {
+        if (!isManager) return;
+        if (ev?.inProgress) return;
+
+        const projectId = Number(projectRef.current.id);
+        const taskId = Number(ev?.id);
+        if (!Number.isFinite(projectId) || projectId <= 0) return;
+        if (!Number.isFinite(taskId) || taskId <= 0) return;
+
+        const patch = (ev?.task || {}) as Partial<GanttTask>;
+        const hasDates = patch.start instanceof Date || patch.end instanceof Date || typeof patch.duration === 'number';
+
+        if (!hasDates && typeof patch.text !== 'string') return;
+
+        if (savingRef.current) return;
+        savingRef.current = true;
+        setSaving(true);
+
+        try {
+          if (hasDates) {
+            const start = patch.start instanceof Date ? patch.start : null;
+            const end = patch.end instanceof Date ? patch.end : null;
+            const duration = typeof patch.duration === 'number' ? clampDurationDays(patch.duration) : undefined;
+
+            if (!start || !end) return;
+
+            const startDate = toIsoDate(start);
+            const endDate = toIsoDate(end);
+            if (!startDate || !endDate) return;
+
+            const existing = projectRef.current.tasks.find((t) => t.id === String(taskId));
+            if (
+              existing &&
+              existing.startDate === startDate &&
+              existing.endDate === endDate &&
+              (typeof duration !== 'number' || (existing.estimatedDuration || 0) === duration)
+            ) {
+              return;
+            }
+
+            await taskAPI.updateTaskTimeline(projectId, taskId, {
+              startDate,
+              endDate,
+              ...(typeof duration === 'number' ? { estimatedDuration: duration } : {}),
+            });
+          } else if (typeof patch.text === 'string') {
+            const existing = projectRef.current.tasks.find((t) => t.id === String(taskId));
+            if (!existing) return;
+            if (existing.title === patch.text) return;
+            await taskAPI.updateTask(projectId, taskId, {
+              taskID: taskId,
+              projectID: projectId,
+              taskName: patch.text,
+              description: existing.description,
+              taskStatus: existing.status,
+              priority: existing.priority,
+              estimatedDuration: existing.estimatedDuration,
+              requiredMemberNum: existing.requiredMemberNum,
+              assignee: existing.assignee,
+              requiredSkills: existing.requiredSkills,
+              skillIDs: existing.skillIDs,
+              startDate: existing.startDate,
+              endDate: existing.endDate,
+              dependencyIds: (existing.dependencies || []).map((d) => Number(d)).filter((d) => Number.isFinite(d)),
+              sprintID: existing.sprintId ? Number(existing.sprintId) : undefined,
+              storyPoints: existing.storyPoints,
+            });
+          }
+
+          await refreshProjectTasks();
+          toast.success('Gantt saved');
+        } catch (err: any) {
+          console.error('Failed to persist Gantt change:', err);
+          toast.error(err?.message || 'Failed to save Gantt change');
+        } finally {
+          savingRef.current = false;
+          setSaving(false);
+        }
+      });
+    },
+    [isManager, refreshProjectTasks],
+  );
+
+  const scales = useMemo(() => {
+    return [
+      { unit: 'month', step: 1, format: '%F %Y' },
+      { unit: 'day', step: 1, format: '%j' },
+    ];
+  }, []);
+
+  return (
+    <div className="bg-white border border-gray-200 rounded-xl overflow-hidden">
+      <div className="px-4 py-3 border-b border-gray-200 flex items-center justify-between">
+        <div>
+          <h2 className="text-gray-900 text-lg font-semibold">Gantt Chart</h2>
+          <p className="text-sm text-gray-600">
+            Drag tasks to change dates{isManager ? ' (auto-saves)' : ''}.
+          </p>
+        </div>
+        {saving && <span className="text-sm text-gray-600">Saving…</span>}
+      </div>
+      <div className="h-[70vh]">
+        <Willow>
+          <Gantt
+            tasks={ganttTasks}
+            links={ganttLinks}
+            scales={scales}
+            init={init}
+            readonly={!isManager}
+            start={ganttTasks[0]?.start}
+          />
+        </Willow>
+      </div>
+    </div>
+  );
+}

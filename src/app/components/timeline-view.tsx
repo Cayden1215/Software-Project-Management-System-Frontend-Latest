@@ -1,8 +1,9 @@
 import { useEffect, useMemo, useState } from 'react';
 import { Project, Task } from '../App';
-import { ArrowRight, AlertCircle, Sparkles, X, Plus, Calendar as CalendarIcon, Edit2, Search, Loader2 } from 'lucide-react';
+import { ArrowRight, AlertCircle, Sparkles, X, Plus, Edit2, Search, Loader2 } from 'lucide-react';
 import { AIScheduler } from './ai-scheduler';
-import { schedulerAPI, type TaskAssignmentDto } from '../services/api-client';
+import { projectAPI, schedulerAPI, type TaskAssignmentDto } from '../services/api-client';
+import { toast } from 'sonner';
 
 interface TimelineViewProps {
   project: Project;
@@ -10,13 +11,21 @@ interface TimelineViewProps {
   onUpdateProject: (project: Project) => void;
 }
 
+interface SchedulableTeamMember {
+  userId: number;
+  name: string;
+  email: string;
+}
+
 export function TimelineView({ project, isManager, onUpdateProject }: TimelineViewProps) {
   const [showAIScheduler, setShowAIScheduler] = useState(false);
   const [showAddTaskModal, setShowAddTaskModal] = useState(false);
   const [editingTaskDates, setEditingTaskDates] = useState<Task | null>(null);
   const [assignments, setAssignments] = useState<TaskAssignmentDto[] | null>(null);
+  const [teamMembers, setTeamMembers] = useState<SchedulableTeamMember[]>([]);
   const [assignmentsLoading, setAssignmentsLoading] = useState(false);
   const [assignmentsError, setAssignmentsError] = useState<string | null>(null);
+  const [timelineSaving, setTimelineSaving] = useState(false);
 
   const refreshAssignments = async () => {
     const projectId = Number(project.id);
@@ -36,8 +45,30 @@ export function TimelineView({ project, isManager, onUpdateProject }: TimelineVi
     }
   };
 
+  const refreshTeamMembers = async () => {
+    const projectId = Number(project.id);
+    if (!Number.isFinite(projectId) || projectId <= 0) return;
+
+    try {
+      const members = await projectAPI.getProjectTeamMembers(projectId);
+      setTeamMembers(
+        members
+          .filter((member) => typeof member.teamMemberID === 'number')
+          .map((member) => ({
+            userId: member.teamMemberID as number,
+            name: member.teamMemberUsername || member.teamMemberEmail || `User ${member.teamMemberID}`,
+            email: member.teamMemberEmail || '',
+          })),
+      );
+    } catch (err) {
+      console.error('Failed to load team members for scheduling:', err);
+      setTeamMembers([]);
+    }
+  };
+
   useEffect(() => {
     refreshAssignments();
+    refreshTeamMembers();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [project.id]);
 
@@ -104,6 +135,7 @@ export function TimelineView({ project, isManager, onUpdateProject }: TimelineVi
             sprintId: projectTask?.sprintId,
             storyPoints: projectTask?.storyPoints,
             assignedMemberNames: assignment.assignedMemberNames || [],
+            assignedMemberIds: assignment.assignedMemberIds || [],
           } as any;
         })
         .filter(Boolean)
@@ -149,44 +181,50 @@ export function TimelineView({ project, isManager, onUpdateProject }: TimelineVi
     return { minDate, maxDate, tasksWithDates };
   }, [assignments, hasAssignmentTimeline, project.tasks]);
 
-  const handleAddTaskToTimeline = (taskId: string, startDate: string) => {
-    const updatedTasks = project.tasks.map(task => {
-      if (task.id === taskId) {
-        const start = new Date(startDate);
-        const end = new Date(start);
-        end.setDate(end.getDate() + task.estimatedDuration);
-        return {
-          ...task,
-          startDate,
-          endDate: end.toISOString().split('T')[0],
-        };
-      }
-      return task;
-    });
+  const handleManualScheduleTask = async (
+    taskId: string,
+    assignedMemberIds: number[],
+    startDate: string,
+    endDate?: string,
+  ) => {
+    const projectId = Number(project.id);
+    const numericTaskId = Number(taskId);
+    if (!Number.isFinite(projectId) || projectId <= 0) return;
+    if (!Number.isFinite(numericTaskId) || numericTaskId <= 0) return;
+    if (!startDate) {
+      toast.error('Start date is required');
+      return;
+    }
+    if (assignedMemberIds.length === 0) {
+      toast.error('Select at least one team member');
+      return;
+    }
 
-    onUpdateProject({ ...project, tasks: updatedTasks });
-    setShowAddTaskModal(false);
-  };
+    if (timelineSaving) return;
+    setTimelineSaving(true);
 
-  const handleUpdateTaskDates = (taskId: string, startDate: string, endDate: string) => {
-    const updatedTasks = project.tasks.map(task => {
-      if (task.id === taskId) {
-        const start = new Date(startDate);
-        const end = new Date(endDate);
-        const duration = Math.ceil((end.getTime() - start.getTime()) / (1000 * 60 * 60 * 24));
-        
-        return {
-          ...task,
-          startDate,
-          endDate,
-          duration: Math.max(1, duration),
-        };
-      }
-      return task;
-    });
+    const task = project.tasks.find((t) => t.id === taskId);
+    if (!task) {
+      setTimelineSaving(false);
+      return;
+    }
 
-    onUpdateProject({ ...project, tasks: updatedTasks });
-    setEditingTaskDates(null);
+    try {
+      await schedulerAPI.manualScheduleTask(projectId, numericTaskId, {
+        assignedMemberIds,
+        scheduledStartDate: startDate,
+        ...(endDate ? { scheduledEndDate: endDate } : {}),
+      });
+      toast.success('Schedule updated');
+      await refreshAssignments();
+      setShowAddTaskModal(false);
+      setEditingTaskDates(null);
+    } catch (err: any) {
+      console.error('Failed to manually schedule task:', err);
+      toast.error(err?.message || 'Failed to update schedule');
+    } finally {
+      setTimelineSaving(false);
+    }
   };
 
   const unscheduledTasks = hasAssignmentTimeline
@@ -225,8 +263,6 @@ export function TimelineView({ project, isManager, onUpdateProject }: TimelineVi
               <button
                 className="px-4 py-2 bg-purple-500 text-white rounded hover:bg-purple-600 flex items-center gap-2"
                 onClick={() => setShowAddTaskModal(true)}
-                disabled={hasAssignmentTimeline}
-                title={hasAssignmentTimeline ? 'Manual scheduling is disabled when using the AI schedule timeline.' : undefined}
               >
                 <Plus className="w-4 h-4" />
                 Add Task to Timeline
@@ -247,8 +283,10 @@ export function TimelineView({ project, isManager, onUpdateProject }: TimelineVi
         {showAddTaskModal && (
           <AddTaskToTimelineModal
             tasks={unscheduledTasks}
-            onAdd={handleAddTaskToTimeline}
+            teamMembers={teamMembers}
+            onAdd={handleManualScheduleTask}
             onClose={() => setShowAddTaskModal(false)}
+            isSaving={timelineSaving}
           />
         )}
       </div>
@@ -388,11 +426,11 @@ export function TimelineView({ project, isManager, onUpdateProject }: TimelineVi
                           <span className="text-white text-sm truncate">{task.title}</span>
                           <div className="flex items-center gap-2">
                             <span className={`w-2 h-2 rounded-full ${getPriorityColor(task.priority)} flex-shrink-0`} />
-                            {isManager && !hasAssignmentTimeline && (
+                            {isManager && (
                               <button
                                 onClick={() => setEditingTaskDates(task as any)}
                                 className="opacity-0 group-hover:opacity-100 transition-opacity p-1 hover:bg-white hover:bg-opacity-20 rounded"
-                                title="Edit dates"
+                                title="Edit schedule"
                               >
                                 <Edit2 className="w-3 h-3 text-white" />
                               </button>
@@ -527,8 +565,10 @@ export function TimelineView({ project, isManager, onUpdateProject }: TimelineVi
       {showAddTaskModal && (
         <AddTaskToTimelineModal
           tasks={unscheduledTasks}
-          onAdd={handleAddTaskToTimeline}
+          teamMembers={teamMembers}
+          onAdd={handleManualScheduleTask}
           onClose={() => setShowAddTaskModal(false)}
+          isSaving={timelineSaving}
         />
       )}
 
@@ -536,8 +576,10 @@ export function TimelineView({ project, isManager, onUpdateProject }: TimelineVi
       {editingTaskDates && (
         <EditTaskDatesModal
           task={editingTaskDates}
-          onSave={handleUpdateTaskDates}
+          teamMembers={teamMembers}
+          onSave={handleManualScheduleTask}
           onClose={() => setEditingTaskDates(null)}
+          isSaving={timelineSaving}
         />
       )}
     </div>
@@ -546,15 +588,20 @@ export function TimelineView({ project, isManager, onUpdateProject }: TimelineVi
 
 interface AddTaskToTimelineModalProps {
   tasks: Task[];
-  onAdd: (taskId: string, startDate: string) => void;
+  teamMembers: SchedulableTeamMember[];
+  onAdd: (taskId: string, assignedMemberIds: number[], startDate: string, endDate?: string) => Promise<void>;
   onClose: () => void;
+  isSaving?: boolean;
 }
 
-function AddTaskToTimelineModal({ tasks, onAdd, onClose }: AddTaskToTimelineModalProps) {
+function AddTaskToTimelineModal({ tasks, teamMembers, onAdd, onClose, isSaving }: AddTaskToTimelineModalProps) {
   const [selectedTaskId, setSelectedTaskId] = useState<string>('');
   const [startDate, setStartDate] = useState<string>(new Date().toISOString().split('T')[0]);
+  const [endDate, setEndDate] = useState<string>('');
+  const [selectedMemberIds, setSelectedMemberIds] = useState<number[]>([]);
   const [searchQuery, setSearchQuery] = useState('');
   const [sortBy, setSortBy] = useState<'priority-high' | 'priority-low' | 'date-asc' | 'date-desc'>('priority-high');
+  const [submitting, setSubmitting] = useState(false);
 
   const getPriorityValue = (priority: Task['priority']) => {
     switch (priority) {
@@ -589,11 +636,23 @@ function AddTaskToTimelineModal({ tasks, onAdd, onClose }: AddTaskToTimelineModa
     }
   });
 
-  const handleSubmit = (e: React.FormEvent) => {
+  const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (selectedTaskId) {
-      onAdd(selectedTaskId, startDate);
+    if (!selectedTaskId) return;
+    if (selectedMemberIds.length === 0) return;
+    if (submitting || isSaving) return;
+    try {
+      setSubmitting(true);
+      await onAdd(selectedTaskId, selectedMemberIds, startDate, endDate || undefined);
+    } finally {
+      setSubmitting(false);
     }
+  };
+
+  const toggleMember = (memberId: number) => {
+    setSelectedMemberIds((current) =>
+      current.includes(memberId) ? current.filter((id) => id !== memberId) : [...current, memberId],
+    );
   };
 
   return (
@@ -644,6 +703,44 @@ function AddTaskToTimelineModal({ tasks, onAdd, onClose }: AddTaskToTimelineModa
                 className="w-full px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-purple-500 focus:border-transparent"
                 required
               />
+            </div>
+
+            <div>
+              <label className="block text-gray-700 mb-2">End Date</label>
+              <input
+                type="date"
+                value={endDate}
+                onChange={(e) => setEndDate(e.target.value)}
+                min={startDate}
+                className="w-full px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-purple-500 focus:border-transparent"
+              />
+              <p className="text-xs text-gray-500 mt-1">Leave blank to let the backend calculate from task duration.</p>
+            </div>
+
+            <div>
+              <label className="block text-gray-700 mb-2">Assigned Team Members</label>
+              {teamMembers.length === 0 ? (
+                <div className="p-3 bg-yellow-50 text-yellow-700 rounded-lg text-sm">
+                  No enrolled team members are available for scheduling.
+                </div>
+              ) : (
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
+                  {teamMembers.map((member) => (
+                    <label key={member.userId} className="flex items-start gap-2 p-3 border border-gray-200 rounded-lg hover:bg-gray-50">
+                      <input
+                        type="checkbox"
+                        checked={selectedMemberIds.includes(member.userId)}
+                        onChange={() => toggleMember(member.userId)}
+                        className="mt-1"
+                      />
+                      <span>
+                        <span className="block text-sm text-gray-900">{member.name}</span>
+                        {member.email && <span className="block text-xs text-gray-500">{member.email}</span>}
+                      </span>
+                    </label>
+                  ))}
+                </div>
+              )}
             </div>
           </div>
 
@@ -722,7 +819,7 @@ function AddTaskToTimelineModal({ tasks, onAdd, onClose }: AddTaskToTimelineModa
             <div className="p-4 bg-blue-50 border-t border-blue-100 flex-shrink-0">
               <div className="text-sm text-blue-700">
                 <strong>{tasks.find(t => t.id === selectedTaskId)?.title}</strong> will be scheduled from {new Date(startDate).toLocaleDateString()} 
-                {' '}(Duration: {tasks.find(t => t.id === selectedTaskId)?.estimatedDuration} days)
+                {' '}with {selectedMemberIds.length} member{selectedMemberIds.length === 1 ? '' : 's'}
               </div>
             </div>
           )}
@@ -737,9 +834,10 @@ function AddTaskToTimelineModal({ tasks, onAdd, onClose }: AddTaskToTimelineModa
             </button>
             <button
               type="submit"
-              disabled={!selectedTaskId}
-              className="px-4 py-2 bg-purple-600 text-white rounded-lg hover:bg-purple-700 transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+              disabled={!selectedTaskId || selectedMemberIds.length === 0 || submitting || Boolean(isSaving)}
+              className="px-4 py-2 bg-purple-600 text-white rounded-lg hover:bg-purple-700 transition-colors disabled:opacity-50 disabled:cursor-not-allowed flex items-center gap-2"
             >
+              {(submitting || isSaving) && <Loader2 className="w-4 h-4 animate-spin" />}
               Add to Timeline
             </button>
           </div>
@@ -751,21 +849,41 @@ function AddTaskToTimelineModal({ tasks, onAdd, onClose }: AddTaskToTimelineModa
 
 interface EditTaskDatesModalProps {
   task: Task;
-  onSave: (taskId: string, startDate: string, endDate: string) => void;
+  teamMembers: SchedulableTeamMember[];
+  onSave: (taskId: string, assignedMemberIds: number[], startDate: string, endDate?: string) => Promise<void>;
   onClose: () => void;
+  isSaving?: boolean;
 }
 
-function EditTaskDatesModal({ task, onSave, onClose }: EditTaskDatesModalProps) {
-  const [startDate, setStartDate] = useState<string>(task.startDate || '');
-  const [endDate, setEndDate] = useState<string>(task.endDate || '');
+function EditTaskDatesModal({ task, teamMembers, onSave, onClose, isSaving }: EditTaskDatesModalProps) {
+  const toDateInputValue = (value?: string | Date) => {
+    if (!value) return '';
+    if (value instanceof Date) return value.toISOString().split('T')[0] || '';
+    return value;
+  };
 
-  const handleSubmit = (e: React.FormEvent) => {
+  const [startDate, setStartDate] = useState<string>(toDateInputValue(task.startDate));
+  const [endDate, setEndDate] = useState<string>(toDateInputValue(task.endDate));
+  const [selectedMemberIds, setSelectedMemberIds] = useState<number[]>((task as any).assignedMemberIds || []);
+  const [submitting, setSubmitting] = useState(false);
+
+  const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (startDate && endDate) {
+    if (startDate) {
       const start = new Date(startDate);
-      const end = new Date(endDate);
-      if (end >= start) {
-        onSave(task.id, startDate, endDate);
+      const end = endDate ? new Date(endDate) : null;
+      if (!end || end >= start) {
+        if (selectedMemberIds.length === 0) {
+          alert('Select at least one team member');
+          return;
+        }
+        if (submitting || isSaving) return;
+        try {
+          setSubmitting(true);
+          await onSave(task.id, selectedMemberIds, startDate, endDate || undefined);
+        } finally {
+          setSubmitting(false);
+        }
       } else {
         alert('End date must be after start date');
       }
@@ -780,6 +898,12 @@ function EditTaskDatesModal({ task, onSave, onClose }: EditTaskDatesModalProps) 
       return Math.max(1, duration);
     }
     return task.estimatedDuration;
+  };
+
+  const toggleMember = (memberId: number) => {
+    setSelectedMemberIds((current) =>
+      current.includes(memberId) ? current.filter((id) => id !== memberId) : [...current, memberId],
+    );
   };
 
   return (
@@ -821,9 +945,36 @@ function EditTaskDatesModal({ task, onSave, onClose }: EditTaskDatesModalProps) 
                 type="date"
                 value={endDate}
                 onChange={(e) => setEndDate(e.target.value)}
+                min={startDate}
                 className="w-full px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-purple-500 focus:border-transparent"
-                required
               />
+              <p className="text-xs text-gray-500 mt-1">Leave blank to let the backend calculate from task duration.</p>
+            </div>
+
+            <div>
+              <label className="block text-gray-700 mb-2">Assigned Team Members</label>
+              {teamMembers.length === 0 ? (
+                <div className="p-3 bg-yellow-50 text-yellow-700 rounded-lg text-sm">
+                  No enrolled team members are available for scheduling.
+                </div>
+              ) : (
+                <div className="space-y-2 max-h-48 overflow-y-auto">
+                  {teamMembers.map((member) => (
+                    <label key={member.userId} className="flex items-start gap-2 p-3 border border-gray-200 rounded-lg hover:bg-gray-50">
+                      <input
+                        type="checkbox"
+                        checked={selectedMemberIds.includes(member.userId)}
+                        onChange={() => toggleMember(member.userId)}
+                        className="mt-1"
+                      />
+                      <span>
+                        <span className="block text-sm text-gray-900">{member.name}</span>
+                        {member.email && <span className="block text-xs text-gray-500">{member.email}</span>}
+                      </span>
+                    </label>
+                  ))}
+                </div>
+              )}
             </div>
 
             {startDate && endDate && (
@@ -843,8 +994,10 @@ function EditTaskDatesModal({ task, onSave, onClose }: EditTaskDatesModalProps) 
             </button>
             <button
               type="submit"
-              className="px-4 py-2 bg-purple-600 text-white rounded-lg hover:bg-purple-700 transition-colors"
+              disabled={selectedMemberIds.length === 0 || submitting || Boolean(isSaving)}
+              className="px-4 py-2 bg-purple-600 text-white rounded-lg hover:bg-purple-700 transition-colors disabled:opacity-50 disabled:cursor-not-allowed flex items-center gap-2"
             >
+              {(submitting || isSaving) && <Loader2 className="w-4 h-4 animate-spin" />}
               Save Changes
             </button>
           </div>
