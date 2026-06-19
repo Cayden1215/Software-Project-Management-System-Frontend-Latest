@@ -124,7 +124,6 @@ export function TimelineView({ project, isManager, onUpdateProject }: TimelineVi
             title: assignment.taskName || projectTask?.title || 'Task',
             description: projectTask?.description || '',
             status: projectTask?.status || 'todo',
-            priority: projectTask?.priority || 'medium',
             requiredSkills: projectTask?.requiredSkills || [],
             skillIDs: projectTask?.skillIDs,
             startDate: start,
@@ -303,17 +302,6 @@ export function TimelineView({ project, isManager, onUpdateProject }: TimelineVi
     return { left: `${left}%`, width: `${width}%` };
   };
 
-  const getPriorityColor = (priority: Task['priority']) => {
-    switch (priority) {
-      case 'high':
-        return 'bg-red-500';
-      case 'medium':
-        return 'bg-yellow-500';
-      case 'low':
-        return 'bg-green-500';
-    }
-  };
-
   const getStatusColor = (status: Task['status']) => {
     switch (status) {
       case 'done':
@@ -425,7 +413,6 @@ export function TimelineView({ project, isManager, onUpdateProject }: TimelineVi
                         <div className="h-full flex items-center justify-between px-3">
                           <span className="text-white text-sm truncate">{task.title}</span>
                           <div className="flex items-center gap-2">
-                            <span className={`w-2 h-2 rounded-full ${getPriorityColor(task.priority)} flex-shrink-0`} />
                             {isManager && (
                               <button
                                 onClick={() => setEditingTaskDates(task as any)}
@@ -600,19 +587,8 @@ function AddTaskToTimelineModal({ tasks, teamMembers, onAdd, onClose, isSaving }
   const [endDate, setEndDate] = useState<string>('');
   const [selectedMemberIds, setSelectedMemberIds] = useState<number[]>([]);
   const [searchQuery, setSearchQuery] = useState('');
-  const [sortBy, setSortBy] = useState<'priority-high' | 'priority-low' | 'date-asc' | 'date-desc'>('priority-high');
+  const [sortBy, setSortBy] = useState<'date-asc' | 'date-desc'>('date-desc');
   const [submitting, setSubmitting] = useState(false);
-
-  const getPriorityValue = (priority: Task['priority']) => {
-    switch (priority) {
-      case 'high':
-        return 3;
-      case 'medium':
-        return 2;
-      case 'low':
-        return 1;
-    }
-  };
 
   // Filter tasks
   const filteredTasks = tasks.filter(task =>
@@ -623,10 +599,6 @@ function AddTaskToTimelineModal({ tasks, teamMembers, onAdd, onClose, isSaving }
   // Sort tasks
   const sortedTasks = [...filteredTasks].sort((a, b) => {
     switch (sortBy) {
-      case 'priority-high':
-        return getPriorityValue(b.priority) - getPriorityValue(a.priority);
-      case 'priority-low':
-        return getPriorityValue(a.priority) - getPriorityValue(b.priority);
       case 'date-asc':
         return a.id.localeCompare(b.id);
       case 'date-desc':
@@ -687,8 +659,6 @@ function AddTaskToTimelineModal({ tasks, teamMembers, onAdd, onClose, isSaving }
                 onChange={(e) => setSortBy(e.target.value as typeof sortBy)}
                 className="px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-purple-500 focus:border-transparent"
               >
-                <option value="priority-high">Priority: High to Low</option>
-                <option value="priority-low">Priority: Low to High</option>
                 <option value="date-desc">Recently Added</option>
                 <option value="date-asc">Oldest First</option>
               </select>
@@ -756,17 +726,6 @@ function AddTaskToTimelineModal({ tasks, teamMembers, onAdd, onClose, isSaving }
             ) : (
               <div className="divide-y divide-gray-200">
                 {sortedTasks.map(task => {
-                  const getPriorityColor = (priority: Task['priority']) => {
-                    switch (priority) {
-                      case 'high':
-                        return 'bg-red-100 text-red-700';
-                      case 'medium':
-                        return 'bg-yellow-100 text-yellow-700';
-                      case 'low':
-                        return 'bg-green-100 text-green-700';
-                    }
-                  };
-
                   return (
                     <label
                       key={task.id}
@@ -785,9 +744,6 @@ function AddTaskToTimelineModal({ tasks, teamMembers, onAdd, onClose, isSaving }
                       <div className="flex-1">
                         <div className="flex items-center gap-2 mb-1">
                           <span className="text-gray-900">{task.title}</span>
-                          <span className={`px-2 py-0.5 rounded text-xs ${getPriorityColor(task.priority)}`}>
-                            {task.priority}
-                          </span>
                           <span className="text-sm text-gray-600">({task.estimatedDuration} days)</span>
                         </div>
                         {task.description && (

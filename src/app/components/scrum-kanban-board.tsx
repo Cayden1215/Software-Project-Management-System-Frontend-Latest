@@ -52,7 +52,6 @@ export function ScrumKanbanBoard({ project, currentUser, isManager, onUpdateProj
       estimatedDuration: dto.estimatedDuration || 0,
       requiredMemberNum: dto.requiredMemberNum ?? 1,
       dependencies: (dto.dependencyIds || []).map((depId) => depId.toString()),
-      priority: (dto.priority as Task['priority']) || 'medium',
       sprintId: dto.sprintID?.toString(),
       storyPoints: dto.storyPoints,
     }));
@@ -124,7 +123,7 @@ export function ScrumKanbanBoard({ project, currentUser, isManager, onUpdateProj
         taskName: draggedTask.title,
         description: draggedTask.description,
         taskStatus: status,
-        priority: draggedTask.priority,
+        priority: 'medium',
         estimatedDuration: draggedTask.estimatedDuration ?? 1,
         requiredMemberNum: draggedTask.requiredMemberNum ?? 1,
         assignee: draggedTask.assignee,
@@ -184,7 +183,7 @@ export function ScrumKanbanBoard({ project, currentUser, isManager, onUpdateProj
         taskName: task.title,
         description: task.description,
         taskStatus: task.status,
-        priority: task.priority,
+        priority: 'medium',
         estimatedDuration: task.estimatedDuration ?? 1,
         requiredMemberNum: task.requiredMemberNum ?? 1,
         assignee: task.assignee,
@@ -322,7 +321,7 @@ export function ScrumKanbanBoard({ project, currentUser, isManager, onUpdateProj
           projectID: projectID,
           description: task.description,
           taskStatus: task.status,
-          priority: task.priority,
+          priority: 'medium',
           estimatedDuration: task.estimatedDuration ?? 1,
           requiredMemberNum: task.requiredMemberNum ?? 1,
           assignee: task.assignee,
@@ -423,7 +422,7 @@ export function ScrumKanbanBoard({ project, currentUser, isManager, onUpdateProj
             projectID: projectID,
             description: task.description,
             taskStatus: task.status,
-            priority: task.priority,
+            priority: 'medium',
             estimatedDuration: task.estimatedDuration ?? 1,
             requiredMemberNum: task.requiredMemberNum ?? 1,
             assignee: task.assignee,
@@ -735,17 +734,6 @@ export function ScrumKanbanBoard({ project, currentUser, isManager, onUpdateProj
   }
 
   function TaskCard({ task, allTasks, project, currentUser, isManager, onDragStart, onClick, onRemoveFromSprint }: TaskCardProps) {
-    const getPriorityColor = (priority: Task['priority']) => {
-      switch (priority) {
-        case 'high':
-          return 'text-red-600';
-        case 'medium':
-          return 'text-yellow-600';
-        case 'low':
-          return 'text-green-600';
-      }
-    };
-
     const getStatusColor = (status: Task['status']) => {
       switch (status) {
         case 'done':
@@ -812,10 +800,6 @@ export function ScrumKanbanBoard({ project, currentUser, isManager, onUpdateProj
           </div>
 
           <div className="flex items-center gap-2 flex-wrap mt-3">
-            <span className={`px-2 py-1 rounded text-xs ${getPriorityColor(task.priority)} bg-opacity-10 bg-current`}>
-              {task.priority}
-            </span>
-
             {task.storyPoints !== undefined && (
               <span className="px-2 py-1 bg-purple-100 text-purple-700 rounded text-xs">
                 {task.storyPoints} pts
@@ -888,21 +872,9 @@ export function ScrumKanbanBoard({ project, currentUser, isManager, onUpdateProj
   function BacklogList({ tasks, project, currentUser, isManager, onEditTask, onAddToSprint }: BacklogListProps) {
     const [selectedTaskForSprint, setSelectedTaskForSprint] = useState<string | null>(null);
     const [searchQuery, setSearchQuery] = useState('');
-    const [sortBy, setSortBy] = useState<'priority-high' | 'priority-low' | 'date-asc' | 'date-desc' | 'schedule-asc' | 'schedule-desc'>('schedule-asc');
+    const [sortBy, setSortBy] = useState<'date-asc' | 'date-desc' | 'schedule-asc' | 'schedule-desc'>('schedule-asc');
     const [filterStatus, setFilterStatus] = useState<'all' | 'todo'>('all');
-    const [filterPriority, setFilterPriority] = useState<'all' | 'high'>('all');
     const [showFilters, setShowFilters] = useState(false);
-
-    const getPriorityColor = (priority: Task['priority']) => {
-      switch (priority) {
-        case 'high':
-          return 'bg-red-100 text-red-700';
-        case 'medium':
-          return 'bg-yellow-100 text-yellow-700';
-        case 'low':
-          return 'bg-green-100 text-green-700';
-      }
-    };
 
     const getStatusColor = (status: Task['status']) => {
       switch (status) {
@@ -930,17 +902,6 @@ export function ScrumKanbanBoard({ project, currentUser, isManager, onUpdateProj
       }
     };
 
-    const getPriorityValue = (priority: Task['priority']) => {
-      switch (priority) {
-        case 'high':
-          return 3;
-        case 'medium':
-          return 2;
-        case 'low':
-          return 1;
-      }
-    };
-
     // Filter tasks
     let filteredTasks = tasks.filter(task => {
       // Search filter
@@ -950,19 +911,12 @@ export function ScrumKanbanBoard({ project, currentUser, isManager, onUpdateProj
       // Status filter
       const matchesStatus = filterStatus === 'all' || task.status === 'todo';
 
-      // Priority filter
-      const matchesPriority = filterPriority === 'all' || task.priority === 'high';
-
-      return matchesSearch && matchesStatus && matchesPriority;
+      return matchesSearch && matchesStatus;
     });
 
     // Sort tasks
     filteredTasks = [...filteredTasks].sort((a, b) => {
       switch (sortBy) {
-        case 'priority-high':
-          return getPriorityValue(b.priority) - getPriorityValue(a.priority);
-        case 'priority-low':
-          return getPriorityValue(a.priority) - getPriorityValue(b.priority);
         case 'date-asc':
           // Recently added = newer first (descending by ID/creation)
           return a.id.localeCompare(b.id);
@@ -984,7 +938,7 @@ export function ScrumKanbanBoard({ project, currentUser, isManager, onUpdateProj
       }
     });
 
-    const activeFiltersCount = (filterStatus !== 'all' ? 1 : 0) + (filterPriority !== 'all' ? 1 : 0);
+    const activeFiltersCount = filterStatus !== 'all' ? 1 : 0;
 
     return (
       <div className="bg-white rounded-lg border border-gray-200 h-full flex flex-col">
@@ -1019,8 +973,6 @@ export function ScrumKanbanBoard({ project, currentUser, isManager, onUpdateProj
             >
               <option value="schedule-asc">Schedule: Earliest First</option>
               <option value="schedule-desc">Schedule: Latest First</option>
-              <option value="priority-high">Priority: High to Low</option>
-              <option value="priority-low">Priority: Low to High</option>
               <option value="date-desc">Recently Added</option>
               <option value="date-asc">Oldest First</option>
             </select>
@@ -1058,23 +1010,10 @@ export function ScrumKanbanBoard({ project, currentUser, isManager, onUpdateProj
                 </select>
               </div>
 
-              <div className="flex items-center gap-2">
-                <label className="text-sm text-gray-700">Priority:</label>
-                <select
-                  value={filterPriority}
-                  onChange={(e) => setFilterPriority(e.target.value as any)}
-                  className="px-3 py-1 border border-gray-300 rounded-lg text-sm focus:ring-2 focus:ring-blue-500 focus:border-transparent"
-                >
-                  <option value="all">All</option>
-                  <option value="high">High Priority Only</option>
-                </select>
-              </div>
-
               {activeFiltersCount > 0 && (
                 <button
                   onClick={() => {
                     setFilterStatus('all');
-                    setFilterPriority('all');
                   }}
                   className="ml-auto px-3 py-1 text-sm text-blue-600 hover:text-blue-700"
                 >
@@ -1113,9 +1052,6 @@ export function ScrumKanbanBoard({ project, currentUser, isManager, onUpdateProj
                     <div className="flex-1" onClick={() => onEditTask(task)} role="button">
                       <div className="flex items-center gap-2 mb-2">
                         <h4 className="text-gray-900">{task.title}</h4>
-                        <span className={`px-2 py-1 rounded text-xs ${getPriorityColor(task.priority)}`}>
-                          {task.priority}
-                        </span>
                         <span className={`px-2 py-1 rounded text-xs ${getStatusColor(task.status)}`}>
                           {getStatusLabel(task.status)}
                         </span>

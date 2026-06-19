@@ -22,7 +22,6 @@ export function TaskModal({ task, allTasks, project, isManager, onSave, onDelete
     requiredMemberNum: 1,
     dependencies: [],
     requiredSkills: [],
-    priority: 'medium',
     ...task,
   });
 
@@ -90,7 +89,7 @@ export function TaskModal({ task, allTasks, project, isManager, onSave, onDelete
       dependencies: formData.dependencies || [],
       requiredSkills: formData.requiredSkills || [],
       skillIDs: formData.skillIDs || [],
-      priority: formData.priority || 'medium',
+      sprintId: formData.sprintId,
       storyPoints: formData.storyPoints,
     };
 
@@ -226,20 +225,23 @@ export function TaskModal({ task, allTasks, project, isManager, onSave, onDelete
               </p>
             </div>
 
-            {/* Priority */}
+            {/* Sprint */}
             <div>
               <label className="block text-gray-700 mb-2">
-                Priority
+                Sprint
               </label>
               <select
-                value={formData.priority}
-                onChange={(e) => setFormData({ ...formData, priority: e.target.value as Task['priority'] })}
+                value={formData.sprintId || ''}
+                onChange={(e) => setFormData({ ...formData, sprintId: e.target.value || undefined })}
                 className="w-full px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent"
                 disabled={!isManager}
               >
-                <option value="low">Low</option>
-                <option value="medium">Medium</option>
-                <option value="high">High</option>
+                <option value="">Backlog</option>
+                {project.sprints.map((sprint) => (
+                  <option key={sprint.id} value={sprint.id}>
+                    {sprint.name}
+                  </option>
+                ))}
               </select>
             </div>
 

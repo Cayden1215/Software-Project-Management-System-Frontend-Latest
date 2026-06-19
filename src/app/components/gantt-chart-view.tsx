@@ -102,17 +102,6 @@ const convertTaskStatus = (status: string | undefined): Task['status'] => {
   }
 };
 
-const convertTaskPriority = (priority: string | undefined): Task['priority'] => {
-  switch ((priority || '').toLowerCase()) {
-    case 'low':
-      return 'low';
-    case 'high':
-      return 'high';
-    default:
-      return 'medium';
-  }
-};
-
 const areTasksEqualForGanttRefresh = (a: Task[], b: Task[]): boolean => {
   if (a === b) return true;
   if (a.length !== b.length) return false;
@@ -172,7 +161,6 @@ export function GanttChartView({ project, isManager, onUpdateProject }: GanttCha
       estimatedDuration: dto.estimatedDuration || 0,
       requiredMemberNum: dto.requiredMemberNum ?? 1,
       dependencies: (dto.dependencyIds || []).map((depId) => depId.toString()),
-      priority: convertTaskPriority(dto.priority),
       sprintId: dto.sprintID?.toString(),
       storyPoints: dto.storyPoints,
     }));
@@ -395,7 +383,7 @@ export function GanttChartView({ project, isManager, onUpdateProject }: GanttCha
               taskName: patch.text,
               description: existing.description,
               taskStatus: existing.status,
-              priority: existing.priority,
+              priority: 'medium',
               estimatedDuration: existing.estimatedDuration,
               requiredMemberNum: existing.requiredMemberNum,
               assignee: existing.assignee,

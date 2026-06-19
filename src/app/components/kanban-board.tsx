@@ -42,7 +42,6 @@ export function KanbanBoard({ project, isManager, onUpdateProject }: KanbanBoard
       estimatedDuration: dto.estimatedDuration || 0,
       requiredMemberNum: dto.requiredMemberNum ?? 1,
       dependencies: (dto.dependencyIds || []).map((id) => id.toString()),
-      priority: (dto.priority as Task['priority']) || 'medium',
       sprintId: dto.sprintID?.toString(),
       storyPoints: dto.storyPoints,
     }));
@@ -83,7 +82,7 @@ export function KanbanBoard({ project, isManager, onUpdateProject }: KanbanBoard
         taskName: draggedTask.title,
         description: draggedTask.description,
         taskStatus: status,
-        priority: draggedTask.priority,
+        priority: 'medium',
         estimatedDuration: draggedTask.estimatedDuration ?? 1,
         requiredMemberNum: draggedTask.requiredMemberNum ?? 1,
         assignee: draggedTask.assignee,
@@ -133,7 +132,7 @@ export function KanbanBoard({ project, isManager, onUpdateProject }: KanbanBoard
       taskName: task.title,
       description: task.description,
       taskStatus: task.status,
-      priority: task.priority,
+      priority: 'medium',
       estimatedDuration: task.estimatedDuration ?? 1,
       requiredMemberNum: task.requiredMemberNum ?? 1,
       assignee: task.assignee,
@@ -270,17 +269,6 @@ interface TaskCardProps {
 }
 
 function TaskCard({ task, allTasks, onDragStart, onClick }: TaskCardProps) {
-  const getPriorityColor = (priority: Task['priority']) => {
-    switch (priority) {
-      case 'high':
-        return 'text-red-600';
-      case 'medium':
-        return 'text-yellow-600';
-      case 'low':
-        return 'text-green-600';
-    }
-  };
-
   const hasDependencies = task.dependencies.length > 0;
   const dependencyTasks = allTasks.filter(t => task.dependencies.includes(t.id));
   const blockedByIncompleteTasks = dependencyTasks.some(t => t.status !== 'done');
@@ -303,10 +291,6 @@ function TaskCard({ task, allTasks, onDragStart, onClick }: TaskCardProps) {
       </div>
 
       <div className="flex items-center gap-2 flex-wrap mt-3">
-        <span className={`px-2 py-1 rounded text-xs ${getPriorityColor(task.priority)} bg-opacity-10 bg-current`}>
-          {task.priority}
-        </span>
-        
         {task.estimatedDuration && (
           <span className="flex items-center gap-1 text-xs text-gray-600">
             <Clock className="w-3 h-3" />

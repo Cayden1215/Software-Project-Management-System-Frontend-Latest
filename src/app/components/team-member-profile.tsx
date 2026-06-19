@@ -24,17 +24,6 @@ function convertTaskStatus(status: string | undefined): Task['status'] {
   }
 }
 
-function convertTaskPriority(priority: string | undefined): Task['priority'] {
-  switch ((priority || '').toLowerCase()) {
-    case 'low':
-      return 'low';
-    case 'high':
-      return 'high';
-    default:
-      return 'medium';
-  }
-}
-
 function convertTaskDtoToTask(dto: TaskDto): Task {
   return {
     id: dto.taskID?.toString() || '',
@@ -50,7 +39,6 @@ function convertTaskDtoToTask(dto: TaskDto): Task {
     estimatedDuration: dto.estimatedDuration || 0,
     requiredMemberNum: dto.requiredMemberNum ?? 1,
     dependencies: (dto.dependencyIds || []).map((depId) => depId.toString()),
-    priority: convertTaskPriority(dto.priority),
     sprintId: dto.sprintID?.toString(),
     storyPoints: dto.storyPoints,
   };
@@ -469,17 +457,6 @@ export function TeamMemberProfile({ project, currentUser, onUpdateProject }: Tea
                           : task.status === 'review'
                           ? 'Review'
                           : 'To Do'}
-                      </span>
-                      <span
-                        className={`px-2 py-1 rounded ${
-                          task.priority === 'high'
-                            ? 'bg-red-100 text-red-700'
-                            : task.priority === 'medium'
-                            ? 'bg-yellow-100 text-yellow-700'
-                            : 'bg-green-100 text-green-700'
-                        }`}
-                      >
-                        {task.priority}
                       </span>
                       {task.duration && (
                         <span className="text-gray-600">{task.duration} days</span>

@@ -43,17 +43,6 @@ function convertTaskStatus(status: string | undefined): Task['status'] {
   }
 }
 
-function convertTaskPriority(priority: string | undefined): Task['priority'] {
-  switch ((priority || '').toLowerCase()) {
-    case 'low':
-      return 'low';
-    case 'high':
-      return 'high';
-    default:
-      return 'medium';
-  }
-}
-
 function convertSprintStatus(status: string | undefined): Sprint['status'] {
   switch ((status || '').toLowerCase()) {
     case 'planned':
@@ -105,7 +94,6 @@ export default function ProjectWorkspacePage({
       estimatedDuration: dto.estimatedDuration || 0,
       requiredMemberNum: dto.requiredMemberNum ?? 1,
       dependencies: (dto.dependencyIds || []).map((depId) => depId.toString()),
-      priority: convertTaskPriority(dto.priority),
       sprintId: dto.sprintID?.toString(),
       storyPoints: dto.storyPoints,
     }));

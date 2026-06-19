@@ -288,12 +288,6 @@ export function AIScheduler({ projectId, onScheduleComplete, onClose }: AISchedu
 
       criticalPath.push(...criticalTasks.map(t => t.id));
 
-      // Generate optimizations
-      const highPriorityTasks = scheduledTasks.filter(t => t.priority === 'high');
-      if (highPriorityTasks.length > 0) {
-        optimizations.push(`${highPriorityTasks.length} high-priority tasks identified for close monitoring`);
-      }
-
       const parallelTasks = scheduledTasks.filter(t => t.dependencies.length === 0);
       if (parallelTasks.length > 1) {
         optimizations.push(`${parallelTasks.length} tasks can be started in parallel`);
@@ -372,7 +366,7 @@ export function AIScheduler({ projectId, onScheduleComplete, onClose }: AISchedu
           <h2>AI-Powered Scheduler</h2>
         </div>
         <p className="text-blue-100">
-          Generate an optimized project schedule based on task dependencies, priorities, and durations
+          Generate an optimized project schedule based on task dependencies and durations
         </p>
       </div>
 
@@ -393,7 +387,7 @@ export function AIScheduler({ projectId, onScheduleComplete, onClose }: AISchedu
             />
           </div>
 
-          <div className="grid grid-cols-3 gap-4 p-4 bg-gray-50 rounded-lg">
+          <div className="grid grid-cols-2 gap-4 p-4 bg-gray-50 rounded-lg">
             <div>
               <div className="text-sm text-gray-600 mb-1">Total Tasks</div>
               <div className="text-gray-900">{project.tasks.length}</div>
@@ -402,12 +396,6 @@ export function AIScheduler({ projectId, onScheduleComplete, onClose }: AISchedu
               <div className="text-sm text-gray-600 mb-1">With Dependencies</div>
               <div className="text-gray-900">
                 {project.tasks.filter(t => t.dependencies.length > 0).length}
-              </div>
-            </div>
-            <div>
-              <div className="text-sm text-gray-600 mb-1">High Priority</div>
-              <div className="text-gray-900">
-                {project.tasks.filter(t => t.priority === 'high').length}
               </div>
             </div>
           </div>
@@ -530,13 +518,6 @@ export function AIScheduler({ projectId, onScheduleComplete, onClose }: AISchedu
                               Critical Path
                             </span>
                           )}
-                          <span className={`px-2 py-1 text-xs rounded ${
-                            task.priority === 'high' ? 'bg-red-100 text-red-700' :
-                            task.priority === 'medium' ? 'bg-yellow-100 text-yellow-700' :
-                            'bg-green-100 text-green-700'
-                          }`}>
-                            {task.priority}
-                          </span>
                         </div>
                         {task.description && (
                           <p className="text-sm text-gray-600 mb-2">{task.description}</p>

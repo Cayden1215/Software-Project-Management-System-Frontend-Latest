@@ -19,8 +19,7 @@ export function TaskManagement({ project, currentUser, isManager, onUpdateProjec
   const [editingTask, setEditingTask] = useState<Task | null>(null);
   const [searchTerm, setSearchTerm] = useState('');
   const [filterStatus, setFilterStatus] = useState<Task['status'] | 'all'>('all');
-  const [filterPriority, setFilterPriority] = useState<Task['priority'] | 'all'>('all');
-  const [sortBy, setSortBy] = useState<'priority-high' | 'priority-low' | 'date-asc' | 'date-desc'>('date-desc');
+  const [sortBy, setSortBy] = useState<'date-asc' | 'date-desc'>('date-desc');
 
   // Fetch tasks from API
   const fetchTasks = async () => {
@@ -45,7 +44,6 @@ export function TaskManagement({ project, currentUser, isManager, onUpdateProjec
         estimatedDuration: dto.estimatedDuration || 0,
         requiredMemberNum: dto.requiredMemberNum ?? 1,
         dependencies: (dto.dependencyIds || []).map(id => id.toString()),
-        priority: (dto.priority as Task['priority']) || 'medium',
         sprintId: dto.sprintID?.toString(),
         storyPoints: dto.storyPoints,
       }));
@@ -94,7 +92,7 @@ export function TaskManagement({ project, currentUser, isManager, onUpdateProjec
         taskName: task.title,
         description: task.description,
         taskStatus: task.status,
-        priority: task.priority,
+        priority: 'medium',
         estimatedDuration: task.estimatedDuration ?? 1,
         requiredMemberNum: task.requiredMemberNum ?? 1,
         assignee: task.assignee,
@@ -164,17 +162,6 @@ export function TaskManagement({ project, currentUser, isManager, onUpdateProjec
     return Boolean(task.assignee && task.assignee === currentUser.email);
   };
 
-  const getPriorityColor = (priority: Task['priority']) => {
-    switch (priority) {
-      case 'high':
-        return 'bg-red-100 text-red-700';
-      case 'medium':
-        return 'bg-yellow-100 text-yellow-700';
-      case 'low':
-        return 'bg-green-100 text-green-700';
-    }
-  };
-
   const getStatusColor = (status: Task['status']) => {
     switch (status) {
       case 'done':
@@ -206,18 +193,13 @@ export function TaskManagement({ project, currentUser, isManager, onUpdateProjec
     const matchesSearch = task.title.toLowerCase().includes(searchTerm.toLowerCase()) ||
                          task.description.toLowerCase().includes(searchTerm.toLowerCase());
     const matchesStatus = filterStatus === 'all' || task.status === filterStatus;
-    const matchesPriority = filterPriority === 'all' || task.priority === filterPriority;
     
-    return matchesSearch && matchesStatus && matchesPriority;
+    return matchesSearch && matchesStatus;
   });
 
   // Sort tasks
   const sortedTasks = filteredTasks.sort((a, b) => {
     switch (sortBy) {
-      case 'priority-high':
-        return a.priority === 'high' ? -1 : (b.priority === 'high' ? 1 : 0);
-      case 'priority-low':
-        return a.priority === 'low' ? -1 : (b.priority === 'low' ? 1 : 0);
       case 'date-asc':
         return a.startDate ? (b.startDate ? new Date(a.startDate).getTime() - new Date(b.startDate).getTime() : -1) : 1;
       case 'date-desc':
@@ -327,31 +309,15 @@ export function TaskManagement({ project, currentUser, isManager, onUpdateProjec
             </select>
           </div>
 
-          {/* Priority Filter */}
-          <div>
-            <select
-              value={filterPriority}
-              onChange={(e) => setFilterPriority(e.target.value as Task['priority'] | 'all')}
-              className="px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent"
-            >
-              <option value="all">All Priorities</option>
-              <option value="high">High</option>
-              <option value="medium">Medium</option>
-              <option value="low">Low</option>
-            </select>
-          </div>
-
           {/* Sort By */}
           <div>
             <select
               value={sortBy}
-              onChange={(e) => setSortBy(e.target.value as 'priority-high' | 'priority-low' | 'date-asc' | 'date-desc')}
+              onChange={(e) => setSortBy(e.target.value as 'date-asc' | 'date-desc')}
               className="px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent"
             >
               <option value="date-desc">Sort by Date (Newest First)</option>
               <option value="date-asc">Sort by Date (Oldest First)</option>
-              <option value="priority-high">Sort by Priority (High First)</option>
-              <option value="priority-low">Sort by Priority (Low First)</option>
             </select>
           </div>
         </div>
@@ -375,7 +341,7 @@ export function TaskManagement({ project, currentUser, isManager, onUpdateProjec
             <div className="p-12 text-center">
               <AlertCircle className="w-12 h-12 mx-auto mb-3 text-gray-400" />
               <p className="text-gray-600">
-                {searchTerm || filterStatus !== 'all' || filterPriority !== 'all'
+                {searchTerm || filterStatus !== 'all'
                   ? 'No tasks match your filters'
                   : 'No tasks registered yet. Create your first task to get started.'}
               </p>
@@ -394,9 +360,6 @@ export function TaskManagement({ project, currentUser, isManager, onUpdateProjec
                     <div className="flex-1">
                       <div className="flex items-center gap-2 mb-2">
                         <h4 className="text-gray-900">{task.title}</h4>
-                        <span className={`px-2 py-1 rounded text-xs ${getPriorityColor(task.priority)}`}>
-                          {task.priority}
-                        </span>
                         <span className={`px-2 py-1 rounded text-xs ${getStatusColor(task.status)}`}>
                           {getStatusLabel(task.status)}
                         </span>

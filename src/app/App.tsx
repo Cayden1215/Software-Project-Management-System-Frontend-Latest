@@ -45,7 +45,6 @@ export interface Task {
   estimatedDuration: number; // in days
   requiredMemberNum?: number; // minimum members required
   dependencies: string[]; // task IDs
-  priority: 'low' | 'medium' | 'high';
   sprintId?: string; // Sprint assignment
   storyPoints?: number; // For scrum estimation
 }
