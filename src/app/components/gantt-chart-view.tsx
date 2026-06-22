@@ -1,8 +1,25 @@
 import { type PointerEvent, useCallback, useEffect, useMemo, useState } from 'react';
-import { AlertCircle, CalendarDays, Link2, Loader2, RefreshCw } from 'lucide-react';
+import { AlertCircle, CalendarDays, Link2, Loader2, Plus, RefreshCw } from 'lucide-react';
 import { Project, Task } from '../App';
 import { schedulerAPI, taskAssignmentAPI, type TaskAssignmentDto } from '../services/api-client';
 import { toast } from 'sonner';
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogHeader,
+  DialogTitle,
+} from './ui/dialog';
+import { Button } from './ui/button';
+import { Label } from './ui/label';
+import { Input } from './ui/input';
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from './ui/select';
 
 interface GanttChartViewProps {
   project: Project;
@@ -130,6 +147,17 @@ export function GanttChartView({ project, isManager, onUpdateProject }: GanttCha
   const [savingTaskId, setSavingTaskId] = useState<string | null>(null);
   const [dragState, setDragState] = useState<TimelineDragState | null>(null);
   const [lastRefresh, setLastRefresh] = useState<Date>(new Date());
+  const [showAddTaskModal, setShowAddTaskModal] = useState(false);
+  const [addingTaskId, setAddingTaskId] = useState<string | null>(null);
+  const [unassignedTasks, setUnassignedTasks] = useState<Task[]>([]);
+  const [unassignedTasksLoading, setUnassignedTasksLoading] = useState(false);
+  const [unassignedTasksError, setUnassignedTasksError] = useState<string | null>(null);
+  const [addTaskFormData, setAddTaskFormData] = useState({
+    selectedTaskId: '',
+    startDate: '',
+    endDate: '',
+    assignedMemberIds: [] as number[],
+  });
 
   const refreshTasks = useCallback(async () => {
     const projectId = Number(project.id);
@@ -162,24 +190,102 @@ export function GanttChartView({ project, isManager, onUpdateProject }: GanttCha
     }
   }, [onUpdateProject, project]);
 
-  // Initial fetch on component mount
-  useEffect(() => {
-    refreshTasks();
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [project.id]);
-
-  // Set up real-time polling - refresh every 30 seconds
-  useEffect(() => {
+  const fetchUnassignedTasks = useCallback(async () => {
     const projectId = Number(project.id);
     if (!Number.isFinite(projectId) || projectId <= 0) return;
 
-    const pollingInterval = setInterval(() => {
-      refreshTasks();
-    }, 30000); // 30 seconds polling interval
+    setUnassignedTasksLoading(true);
+    setUnassignedTasksError(null);
 
-    return () => clearInterval(pollingInterval);
+    try {
+      const unassignedTaskDtos = await taskAssignmentAPI.getUnassignedTasks(projectId);
+      // Convert TaskDto objects to Task objects for component usage
+      const convertedTasks: Task[] = unassignedTaskDtos.map((dto) => ({
+        id: String(dto.taskID || ''),
+        title: dto.taskName || 'Untitled Task',
+        description: dto.description || '',
+        status: (dto.taskStatus as Task['status']) || 'todo',
+        assignee: dto.assignee,
+        assignedMemberIds: dto.assignedMemberIds || [],
+        requiredSkills: dto.requiredSkills || [],
+        skillIDs: dto.skillIDs || [],
+        startDate: dto.startDate,
+        endDate: dto.endDate,
+        estimatedDuration: dto.estimatedDuration || 1,
+        requiredMemberNum: dto.requiredMemberNum ?? 1,
+        dependencies: dto.dependencyIds || [],
+        sprintId: dto.sprintID,
+        storyPoints: dto.storyPoints,
+      })).filter((task) => task.id);
+      
+      setUnassignedTasks(convertedTasks);
+    } catch (err: any) {
+      console.error('Failed to load unassigned tasks:', err);
+      const message = err?.message || 'Failed to load unassigned tasks';
+      setUnassignedTasksError(message);
+      // Don't toast error for unassigned tasks - they're secondary
+    } finally {
+      setUnassignedTasksLoading(false);
+    }
+  }, [project.id]);
+
+  // Initial fetch on component mount
+  useEffect(() => {
+    refreshTasks();
+    fetchUnassignedTasks();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [project.id]);
+
+  // Update handleAddTaskSubmit to refresh unassigned tasks after successful add
+  const handleAddTaskSubmit = useCallback(async () => {
+    if (!addTaskFormData.selectedTaskId || !addTaskFormData.startDate || !addTaskFormData.endDate) {
+      toast.error('Please select a task and provide start and end dates');
+      return;
+    }
+
+    const projectId = Number(project.id);
+    const taskId = Number(addTaskFormData.selectedTaskId);
+
+    if (!Number.isFinite(projectId) || projectId <= 0 || !Number.isFinite(taskId) || taskId <= 0) {
+      toast.error('Invalid project or task ID');
+      return;
+    }
+
+    const startDate = new Date(addTaskFormData.startDate);
+    const endDate = new Date(addTaskFormData.endDate);
+
+    if (endDate <= startDate) {
+      toast.error('End date must be after start date');
+      return;
+    }
+
+    setAddingTaskId(addTaskFormData.selectedTaskId);
+
+    try {
+      const selectedTask = unassignedTasks.find((t) => t.id === addTaskFormData.selectedTaskId);
+      await schedulerAPI.manualScheduleTask(projectId, taskId, {
+        assignedMemberIds: addTaskFormData.assignedMemberIds,
+        scheduledStartDate: toDateInputValue(startDate),
+        scheduledEndDate: toDateInputValue(endDate),
+      });
+
+      toast.success(`${selectedTask?.title || 'Task'} added to Gantt chart`);
+      setShowAddTaskModal(false);
+      setAddTaskFormData({
+        selectedTaskId: '',
+        startDate: '',
+        endDate: '',
+        assignedMemberIds: [],
+      });
+      await refreshTasks();
+      await fetchUnassignedTasks();
+    } catch (err: any) {
+      console.error('Failed to add task to Gantt chart:', err);
+      toast.error(err?.message || 'Failed to add task to Gantt chart');
+    } finally {
+      setAddingTaskId(null);
+    }
+  }, [addTaskFormData, unassignedTasks, project, refreshTasks, fetchUnassignedTasks]);
 
   const timeline = useMemo(() => {
     const projectStart = parseDate(project.createdAt) || new Date();
@@ -387,6 +493,8 @@ export function GanttChartView({ project, isManager, onUpdateProject }: GanttCha
     setDragState(null);
   };
 
+
+
   const chartWidth = Math.max(900, (timeline.days.length || 1) * minColumnWidth);
   const rowAreaHeight = Math.max(180, timeline.tasks.length * taskRowHeight);
   const sidebarWidth = 320;
@@ -408,16 +516,38 @@ export function GanttChartView({ project, isManager, onUpdateProject }: GanttCha
             </span>
           </p>
         </div>
-        <button
-          type="button"
-          onClick={refreshTasks}
-          disabled={loading}
-          className="px-3 py-2 rounded-lg border border-gray-300 text-gray-700 hover:bg-gray-50 disabled:opacity-50 flex items-center gap-2"
-          title="Manually refresh Gantt data (auto-refreshes every 30 seconds)"
-        >
-          <RefreshCw className={`w-4 h-4 ${loading ? 'animate-spin' : ''}`} />
-          {loading ? 'Syncing...' : 'Refresh'}
-        </button>
+        <div className="flex flex-wrap items-center gap-2">
+          {isManager && (
+            <button
+              type="button"
+              onClick={() => setShowAddTaskModal(true)}
+              className={`px-3 py-2 rounded-lg flex items-center gap-2 text-sm font-medium ${
+                unassignedTasks.length > 0
+                  ? 'bg-blue-600 text-white hover:bg-blue-700'
+                  : 'bg-gray-300 text-gray-600 cursor-not-allowed'
+              }`}
+              disabled={unassignedTasks.length === 0}
+              title={
+                unassignedTasks.length > 0
+                  ? `Add one of ${unassignedTasks.length} unassigned task(s) to Gantt chart`
+                  : 'All tasks are already scheduled'
+              }
+            >
+              <Plus className="w-4 h-4" />
+              Add Task ({unassignedTasks.length})
+            </button>
+          )}
+          <button
+            type="button"
+            onClick={refreshTasks}
+            disabled={loading}
+            className="px-3 py-2 rounded-lg border border-gray-300 text-gray-700 hover:bg-gray-50 disabled:opacity-50 flex items-center gap-2"
+            title="Manually refresh Gantt data (auto-refreshes every 30 seconds)"
+          >
+            <RefreshCw className={`w-4 h-4 ${loading ? 'animate-spin' : ''}`} />
+            {loading ? 'Syncing...' : 'Refresh'}
+          </button>
+        </div>
       </div>
 
       {error && (
@@ -601,6 +731,118 @@ export function GanttChartView({ project, isManager, onUpdateProject }: GanttCha
           Real-time API sync • Auto-refresh every 30s
         </div>
       </div>
+
+      <Dialog open={showAddTaskModal} onOpenChange={setShowAddTaskModal}>
+        <DialogContent className="sm:max-w-[500px]">
+          <DialogHeader>
+            <DialogTitle>Add Task to Gantt Chart</DialogTitle>
+            <DialogDescription>
+              Select an unscheduled task and provide start/end dates to manually schedule it.
+            </DialogDescription>
+          </DialogHeader>
+
+          <div className="space-y-4 py-4">
+            <div>
+              <Label htmlFor="task-select" className="text-base font-medium mb-2 block">
+                Select Task
+              </Label>
+              <Select
+                value={addTaskFormData.selectedTaskId}
+                onValueChange={(value: string) =>
+                  setAddTaskFormData({ ...addTaskFormData, selectedTaskId: value })
+                }
+              >
+                <SelectTrigger id="task-select">
+                  <SelectValue placeholder="Choose a task..." />
+                </SelectTrigger>
+                <SelectContent>
+                  {unassignedTasksLoading ? (
+                    <div className="px-2 py-1.5 text-sm text-gray-500 flex items-center gap-2">
+                      <Loader2 className="w-4 h-4 animate-spin" />
+                      Loading unassigned tasks...
+                    </div>
+                  ) : unassignedTasksError ? (
+                    <div className="px-2 py-1.5 text-sm text-red-500">
+                      Error: {unassignedTasksError}
+                    </div>
+                  ) : unassignedTasks.length === 0 ? (
+                    <div className="px-2 py-1.5 text-sm text-gray-500">
+                      No unassigned tasks available
+                    </div>
+                  ) : (
+                    unassignedTasks.map((task) => (
+                      <SelectItem key={task.id} value={task.id}>
+                        {task.title}
+                      </SelectItem>
+                    ))
+                  )}
+                </SelectContent>
+              </Select>
+            </div>
+            <div>
+              <Label htmlFor="start-date" className="text-base font-medium mb-2 block">
+                Start Date
+              </Label>
+              <Input
+                id="start-date"
+                type="date"
+                value={addTaskFormData.startDate}
+                onChange={(e) =>
+                  setAddTaskFormData({ ...addTaskFormData, startDate: e.target.value })
+                }
+              />
+            </div>
+            <div>
+              <Label htmlFor="end-date" className="text-base font-medium mb-2 block">
+                End Date
+              </Label>
+              <Input
+                id="end-date"
+                type="date"
+                value={addTaskFormData.endDate}
+                onChange={(e) =>
+                  setAddTaskFormData({ ...addTaskFormData, endDate: e.target.value })
+                }
+              />
+            </div>
+
+            <div className="flex gap-3 justify-end pt-4">
+              <Button
+                variant="outline"
+                onClick={() => {
+                  setShowAddTaskModal(false);
+                  setAddTaskFormData({
+                    selectedTaskId: '',
+                    startDate: '',
+                    endDate: '',
+                    assignedMemberIds: [],
+                  });
+                }}
+                disabled={addingTaskId !== null}
+              >
+                Cancel
+              </Button>
+              <Button
+                onClick={handleAddTaskSubmit}
+                disabled={addingTaskId !== null || !addTaskFormData.selectedTaskId}
+                className="flex items-center gap-2"
+              >
+                {addingTaskId ? (
+                  <>
+                    <Loader2 className="w-4 h-4 animate-spin" />
+                    Adding...
+                  </>
+                ) : (
+                  <>
+                    <Plus className="w-4 h-4" />
+                    Add to Gantt
+                  </>
+                )}
+              </Button>
+            </div>
+          </div>
+        </DialogContent>
+      </Dialog>
 
     </div>
   );

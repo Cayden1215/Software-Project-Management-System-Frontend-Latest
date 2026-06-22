@@ -309,6 +309,10 @@ export const taskAssignmentAPI = {
     return apiRequest<TaskAssignmentDto[]>(`/api/v1/project/${projectId}/tasks/assignments`);
   },
 
+  async getUnassignedTasks(projectId: number): Promise<TaskDto[]> {
+    return apiRequest<TaskDto[]>(`/api/v1/project/${projectId}/tasks/assignments/unassigned`);
+  },
+
   async getTaskAssignment(projectId: number, taskId: number): Promise<TaskAssignmentDto> {
     return apiRequest<TaskAssignmentDto>(`/api/v1/project/${projectId}/tasks/assignments/${taskId}`);
   },
