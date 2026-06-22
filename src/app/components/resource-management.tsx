@@ -39,6 +39,8 @@ export function ResourceManagement({ project, isManager, onUpdateProject }: Reso
     const memberDtos = await projectAPI.getProjectTeamMembers(projectId);
     const members: TeamMember[] = memberDtos.map((m) => ({
       id: (m.projectMemberID ?? m.teamMemberID ?? '').toString(),
+      projectMemberId: m.projectMemberID,
+      teamMemberId: m.teamMemberID,
       name: m.teamMemberUsername || m.teamMemberEmail || 'Team Member',
       email: m.teamMemberEmail || '',
       role: m.projectRole || 'member',
@@ -130,16 +132,16 @@ export function ResourceManagement({ project, isManager, onUpdateProject }: Reso
     }
   };
 
-  const handleDeleteMember = async (memberId: string) => {
-    const idNum = Number(memberId);
-    if (!Number.isFinite(idNum)) {
-      toast.error('Unable to remove member (invalid member id)');
+  const handleDeleteMember = async (teamMemberId?: number) => {
+    const teamMemberIdNum = Number(teamMemberId);
+    if (!Number.isFinite(teamMemberIdNum) || teamMemberIdNum <= 0) {
+      toast.error('Unable to remove member (invalid team member id)');
       return;
     }
 
     try {
       setIsBusy(true);
-      await projectAPI.removeProjectTeamMember(projectId, idNum);
+      await projectAPI.removeProjectTeamMember(projectId, teamMemberIdNum);
       toast.success('Team member removed');
       await refreshTeamMembers();
     } catch (e) {
@@ -431,7 +433,7 @@ export function ResourceManagement({ project, isManager, onUpdateProject }: Reso
                       <button
                         onClick={() => {
                           if (confirm(`Remove ${member.name} from the project?`)) {
-                            handleDeleteMember(member.id);
+                            handleDeleteMember(member.teamMemberId);
                           }
                         }}
                         disabled={isBusy}

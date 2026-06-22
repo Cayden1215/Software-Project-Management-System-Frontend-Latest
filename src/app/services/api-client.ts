@@ -293,8 +293,8 @@ export const projectAPI = {
     return apiRequest<ProjectMemberDto[]>(`/api/v1/projects/${projectId}/enrolled`);
   },
 
-  async removeProjectTeamMember(projectId: number, projectMemberId: number): Promise<void> {
-    return apiRequest<void>(`/api/v1/projects/${projectId}/enrolled/${projectMemberId}`, {
+  async removeProjectTeamMember(projectId: number, teamMemberId: number): Promise<void> {
+    return apiRequest<void>(`/api/v1/projects/${projectId}/enrolled/${teamMemberId}`, {
       method: 'DELETE',
     });
   },

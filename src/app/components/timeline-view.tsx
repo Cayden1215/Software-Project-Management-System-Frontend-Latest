@@ -230,6 +230,32 @@ export function TimelineView({ project, isManager, onUpdateProject }: TimelineVi
     ? project.tasks.filter((t) => !scheduledTaskIdSet.has(t.id))
     : project.tasks.filter((t) => !t.startDate);
 
+  const renderAISchedulerModal = () => (
+    <div className="fixed inset-0 bg-black bg-opacity-50 backdrop-blur-sm flex items-center justify-center p-4 z-50">
+      <div className="bg-white rounded-lg max-w-6xl w-full max-h-[90vh] overflow-y-auto">
+        <div className="sticky top-0 bg-white border-b border-gray-200 p-6 flex items-center justify-between">
+          <h2 className="text-gray-900">AI Project Scheduler</h2>
+          <button
+            onClick={() => setShowAIScheduler(false)}
+            className="p-2 hover:bg-gray-100 rounded-lg transition-colors"
+          >
+            <X className="w-5 h-5 text-gray-600" />
+          </button>
+        </div>
+        <div className="p-6">
+          <AIScheduler
+            project={project}
+            onClose={() => setShowAIScheduler(false)}
+            onScheduleComplete={() => {
+              setShowAIScheduler(false);
+              refreshAssignments();
+            }}
+          />
+        </div>
+      </div>
+    </div>
+  );
+
   if (!timelineData || timelineData.tasksWithDates.length === 0) {
     return (
       <div className="bg-white rounded-lg p-12 text-center border border-gray-200">
@@ -269,16 +295,7 @@ export function TimelineView({ project, isManager, onUpdateProject }: TimelineVi
             )}
           </div>
         )}
-        {showAIScheduler && (
-          <AIScheduler
-            project={project}
-            onClose={() => setShowAIScheduler(false)}
-            onScheduleComplete={() => {
-              setShowAIScheduler(false);
-              refreshAssignments();
-            }}
-          />
-        )}
+        {showAIScheduler && renderAISchedulerModal()}
         {showAddTaskModal && (
           <AddTaskToTimelineModal
             tasks={unscheduledTasks}
@@ -499,31 +516,7 @@ export function TimelineView({ project, isManager, onUpdateProject }: TimelineVi
       </div>
 
       {/* AI Scheduler Modal */}
-      {showAIScheduler && (
-        <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center p-4 z-50">
-          <div className="bg-white rounded-lg max-w-6xl w-full max-h-[90vh] overflow-y-auto">
-            <div className="sticky top-0 bg-white border-b border-gray-200 p-6 flex items-center justify-between">
-              <h2 className="text-gray-900">AI Project Scheduler</h2>
-              <button
-                onClick={() => setShowAIScheduler(false)}
-                className="p-2 hover:bg-gray-100 rounded-lg transition-colors"
-              >
-                <X className="w-5 h-5 text-gray-600" />
-              </button>
-            </div>
-            <div className="p-6">
-              <AIScheduler
-                project={project}
-                onClose={() => setShowAIScheduler(false)}
-                onScheduleComplete={() => {
-                  setShowAIScheduler(false);
-                  refreshAssignments();
-                }}
-              />
-            </div>
-          </div>
-        </div>
-      )}
+      {showAIScheduler && renderAISchedulerModal()}
 
       {/* Add Task to Timeline Modal */}
       {showAddTaskModal && (
