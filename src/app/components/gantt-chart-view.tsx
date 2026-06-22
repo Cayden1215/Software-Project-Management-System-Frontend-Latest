@@ -1,5 +1,5 @@
-import { useCallback, useEffect, useMemo, useState } from 'react';
-import { AlertCircle, CalendarDays, Link2, Loader2, RefreshCw, Save, X } from 'lucide-react';
+import { type PointerEvent, useCallback, useEffect, useMemo, useState } from 'react';
+import { AlertCircle, CalendarDays, Link2, Loader2, RefreshCw } from 'lucide-react';
 import { Project, Task } from '../App';
 import { schedulerAPI, taskAssignmentAPI, type TaskAssignmentDto } from '../services/api-client';
 import { toast } from 'sonner';
@@ -16,6 +16,21 @@ type TimelineTask = Task & {
   durationDays: number;
   offsetDays: number;
   assignment?: TaskAssignmentDto;
+};
+
+type DragMode = 'move' | 'resize-start' | 'resize-end';
+
+type TimelineDragState = {
+  taskId: string;
+  taskTitle: string;
+  mode: DragMode;
+  originClientX: number;
+  originStart: Date;
+  originEnd: Date;
+  previewStart: Date;
+  previewEnd: Date;
+  daysDelta: number;
+  assignedMemberIds: number[];
 };
 
 const dayMs = 1000 * 60 * 60 * 24;
@@ -113,9 +128,7 @@ export function GanttChartView({ project, isManager, onUpdateProject }: GanttCha
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [savingTaskId, setSavingTaskId] = useState<string | null>(null);
-  const [editingTask, setEditingTask] = useState<TimelineTask | null>(null);
-  const [draftStartDate, setDraftStartDate] = useState('');
-  const [draftEndDate, setDraftEndDate] = useState('');
+  const [dragState, setDragState] = useState<TimelineDragState | null>(null);
   const [lastRefresh, setLastRefresh] = useState<Date>(new Date());
 
   const refreshTasks = useCallback(async () => {
@@ -215,19 +228,15 @@ export function GanttChartView({ project, isManager, onUpdateProject }: GanttCha
     return new Map(tasks.map((task) => [task.id, task]));
   }, [tasks]);
 
-  const openEditDialog = (task: TimelineTask) => {
-    setEditingTask(task);
-    setDraftStartDate(toDateInputValue(task.start));
-    setDraftEndDate(toDateInputValue(task.end));
-  };
-
-  const handleSaveTimeline = async () => {
-    if (!editingTask) return;
-
+  const saveTimelineRange = useCallback(async (
+    taskIdValue: string,
+    taskTitle: string,
+    start: Date,
+    end: Date,
+    assignedMemberIds: number[],
+  ) => {
     const projectId = Number(project.id);
-    const taskId = Number(editingTask.id);
-    const start = parseDate(draftStartDate);
-    const end = parseDate(draftEndDate);
+    const taskId = Number(taskIdValue);
 
     if (!Number.isFinite(projectId) || projectId <= 0 || !Number.isFinite(taskId) || taskId <= 0) return;
     if (!start || !end) {
@@ -239,22 +248,143 @@ export function GanttChartView({ project, isManager, onUpdateProject }: GanttCha
       return;
     }
 
-    setSavingTaskId(editingTask.id);
+    const scheduledStartDate = toDateInputValue(start);
+    const scheduledEndDate = toDateInputValue(end);
+
+    setSavingTaskId(taskIdValue);
+    setTasks((currentTasks) => {
+      const nextTasks = currentTasks.map((task) => (
+        task.id === taskIdValue
+          ? { ...task, startDate: scheduledStartDate, endDate: scheduledEndDate }
+          : task
+      ));
+      onUpdateProject({ ...project, tasks: nextTasks });
+      return nextTasks;
+    });
+
     try {
       await schedulerAPI.manualScheduleTask(projectId, taskId, {
-        assignedMemberIds: editingTask.assignment?.assignedMemberIds || editingTask.assignedMemberIds || [],
-        scheduledStartDate: draftStartDate,
-        scheduledEndDate: draftEndDate,
+        assignedMemberIds,
+        scheduledStartDate,
+        scheduledEndDate,
       });
       await refreshTasks();
-      setEditingTask(null);
-      toast.success('Gantt assignment schedule updated');
+      toast.success(`${taskTitle} schedule updated`);
     } catch (err: any) {
       console.error('Failed to save Gantt assignment schedule:', err);
       toast.error(err?.message || 'Failed to save Gantt assignment schedule');
+      await refreshTasks();
     } finally {
       setSavingTaskId(null);
     }
+  }, [onUpdateProject, project, refreshTasks]);
+
+  const getRangeForDrag = useCallback((drag: TimelineDragState, daysDelta: number) => {
+    const timelineStart = timeline.start;
+    const timelineEnd = addDays(timeline.start, timeline.totalDays);
+    const duration = diffDays(drag.originStart, drag.originEnd);
+    let previewStart = drag.originStart;
+    let previewEnd = drag.originEnd;
+
+    if (drag.mode === 'move') {
+      previewStart = addDays(drag.originStart, daysDelta);
+      previewEnd = addDays(drag.originEnd, daysDelta);
+
+      if (previewStart < timelineStart) {
+        previewStart = timelineStart;
+        previewEnd = addDays(previewStart, duration);
+      }
+      if (previewEnd > timelineEnd) {
+        previewEnd = timelineEnd;
+        previewStart = addDays(previewEnd, -duration);
+      }
+    } else if (drag.mode === 'resize-start') {
+      previewStart = addDays(drag.originStart, daysDelta);
+      if (previewStart < timelineStart) previewStart = timelineStart;
+      if (previewStart >= drag.originEnd) previewStart = addDays(drag.originEnd, -1);
+      previewEnd = drag.originEnd;
+    } else {
+      previewEnd = addDays(drag.originEnd, daysDelta);
+      if (previewEnd > timelineEnd) previewEnd = timelineEnd;
+      if (previewEnd <= drag.originStart) previewEnd = addDays(drag.originStart, 1);
+      previewStart = drag.originStart;
+    }
+
+    return { previewStart, previewEnd };
+  }, [timeline.start, timeline.totalDays]);
+
+  const handleTimelinePointerDown = (
+    event: PointerEvent<HTMLDivElement>,
+    task: TimelineTask,
+    mode: DragMode,
+  ) => {
+    if (!isManager || savingTaskId === task.id) return;
+
+    event.preventDefault();
+    event.stopPropagation();
+    event.currentTarget.setPointerCapture(event.pointerId);
+
+    setDragState({
+      taskId: task.id,
+      taskTitle: task.title,
+      mode,
+      originClientX: event.clientX,
+      originStart: task.start,
+      originEnd: task.end,
+      previewStart: task.start,
+      previewEnd: task.end,
+      daysDelta: 0,
+      assignedMemberIds: task.assignment?.assignedMemberIds || task.assignedMemberIds || [],
+    });
+  };
+
+  const handleTimelinePointerMove = (event: PointerEvent<HTMLDivElement>) => {
+    if (!dragState) return;
+
+    const daysDelta = Math.round((event.clientX - dragState.originClientX) / minColumnWidth);
+    if (daysDelta === dragState.daysDelta) return;
+
+    const { previewStart, previewEnd } = getRangeForDrag(dragState, daysDelta);
+    const effectiveDelta = diffDays(dragState.originStart, previewStart);
+
+    setDragState({
+      ...dragState,
+      previewStart,
+      previewEnd,
+      daysDelta: dragState.mode === 'resize-end' ? daysDelta : effectiveDelta,
+    });
+  };
+
+  const handleTimelinePointerUp = (event: PointerEvent<HTMLDivElement>) => {
+    if (!dragState) return;
+
+    if (event.currentTarget.hasPointerCapture(event.pointerId)) {
+      event.currentTarget.releasePointerCapture(event.pointerId);
+    }
+
+    const completedDrag = dragState;
+    setDragState(null);
+
+    const dateChanged =
+      toDateInputValue(completedDrag.previewStart) !== toDateInputValue(completedDrag.originStart)
+      || toDateInputValue(completedDrag.previewEnd) !== toDateInputValue(completedDrag.originEnd);
+
+    if (!dateChanged) return;
+
+    void saveTimelineRange(
+      completedDrag.taskId,
+      completedDrag.taskTitle,
+      completedDrag.previewStart,
+      completedDrag.previewEnd,
+      completedDrag.assignedMemberIds,
+    );
+  };
+
+  const handleTimelinePointerCancel = (event: PointerEvent<HTMLDivElement>) => {
+    if (event.currentTarget.hasPointerCapture(event.pointerId)) {
+      event.currentTarget.releasePointerCapture(event.pointerId);
+    }
+    setDragState(null);
   };
 
   const chartWidth = Math.max(900, (timeline.days.length || 1) * minColumnWidth);
@@ -383,32 +513,68 @@ export function GanttChartView({ project, isManager, onUpdateProject }: GanttCha
 
                   {timeline.tasks.map((task, index) => {
                     const status = getStatusClasses(task.status);
-                    const left = task.offsetDays * minColumnWidth;
-                    const width = Math.max(minColumnWidth, task.durationDays * minColumnWidth);
+                    const draggedRange = dragState?.taskId === task.id
+                      ? { start: dragState.previewStart, end: dragState.previewEnd }
+                      : { start: task.start, end: task.end };
+                    const left = diffDays(timeline.start, draggedRange.start) * minColumnWidth;
+                    const width = Math.max(minColumnWidth, durationFromDates(draggedRange.start, draggedRange.end) * minColumnWidth);
                     const top = index * taskRowHeight + 12;
                     const isSaving = savingTaskId === task.id;
+                    const isDragging = dragState?.taskId === task.id;
+                    const canDrag = isManager && !isSaving;
 
                     return (
                       <div
                         key={task.id}
-                        className={`absolute h-9 rounded-md shadow-sm ${status.bar} text-white group`}
+                        className={`absolute h-9 rounded-md shadow-sm ${status.bar} text-white group select-none ${canDrag ? 'cursor-grab active:cursor-grabbing touch-none' : ''} ${isDragging ? 'ring-2 ring-blue-300 ring-offset-1 z-10' : ''} ${isSaving ? 'opacity-75' : ''}`}
                         style={{ left, top, width }}
-                        title={`${task.title}: ${toDateInputValue(task.start)} to ${toDateInputValue(task.end)}`}
+                        title={`${task.title}: ${toDateInputValue(draggedRange.start)} to ${toDateInputValue(draggedRange.end)}`}
+                        onPointerDown={(event) => handleTimelinePointerDown(event, task, 'move')}
+                        onPointerMove={handleTimelinePointerMove}
+                        onPointerUp={handleTimelinePointerUp}
+                        onPointerCancel={handleTimelinePointerCancel}
                       >
-                        <div className="h-full flex items-center justify-between gap-2 px-3">
+                        {canDrag && (
+                          <div
+                            className="absolute left-0 top-0 h-full w-2 cursor-ew-resize rounded-l-md bg-black/10 opacity-0 group-hover:opacity-100 focus:opacity-100"
+                            role="button"
+                            tabIndex={0}
+                            title="Drag to change start date"
+                            aria-label={`Change start date for ${task.title}`}
+                            onPointerDown={(event) => handleTimelinePointerDown(event, task, 'resize-start')}
+                            onPointerMove={handleTimelinePointerMove}
+                            onPointerUp={handleTimelinePointerUp}
+                            onPointerCancel={handleTimelinePointerCancel}
+                          />
+                        )}
+                        <div className="h-full flex items-center justify-between gap-2 px-3 pointer-events-none">
                           <span className="text-xs font-medium truncate">{task.title}</span>
-                          {isManager && (
-                            <button
-                              type="button"
-                              onClick={() => openEditDialog(task)}
-                              disabled={isSaving}
-                              className="opacity-0 group-hover:opacity-100 focus:opacity-100 p-1 rounded hover:bg-white/20 disabled:opacity-50"
-                              title="Edit dates"
-                            >
-                              {isSaving ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <CalendarDays className="w-3.5 h-3.5" />}
-                            </button>
-                          )}
+                          {isSaving ? (
+                            <Loader2 className="w-3.5 h-3.5 animate-spin flex-none" />
+                          ) : isDragging ? (
+                            <span className="text-[11px] font-medium flex-none">
+                              {toDateInputValue(draggedRange.start)} - {toDateInputValue(draggedRange.end)}
+                            </span>
+                          ) : null}
                         </div>
+                        {canDrag && (
+                          <div
+                            className="absolute right-0 top-0 h-full w-2 cursor-ew-resize rounded-r-md bg-black/10 opacity-0 group-hover:opacity-100 focus:opacity-100"
+                            role="button"
+                            tabIndex={0}
+                            title="Drag to change end date"
+                            aria-label={`Change end date for ${task.title}`}
+                            onPointerDown={(event) => handleTimelinePointerDown(event, task, 'resize-end')}
+                            onPointerMove={handleTimelinePointerMove}
+                            onPointerUp={handleTimelinePointerUp}
+                            onPointerCancel={handleTimelinePointerCancel}
+                          />
+                        )}
+                        {canDrag && !isDragging && (
+                          <div className="absolute -top-5 left-0 hidden whitespace-nowrap rounded bg-gray-900 px-2 py-0.5 text-[11px] text-white group-hover:block">
+                            Drag to move; drag edges to resize
+                          </div>
+                          )}
                       </div>
                     );
                   })}
@@ -436,67 +602,6 @@ export function GanttChartView({ project, isManager, onUpdateProject }: GanttCha
         </div>
       </div>
 
-      {editingTask && (
-        <div className="fixed inset-0 z-50 bg-black/50 flex items-center justify-center p-4">
-          <div className="bg-white rounded-lg w-full max-w-md shadow-xl">
-            <div className="px-5 py-4 border-b border-gray-200 flex items-center justify-between">
-              <div>
-                <h3 className="text-gray-900 font-semibold">Edit Gantt Dates</h3>
-                <p className="text-sm text-gray-500 truncate max-w-[320px]">{editingTask.title}</p>
-              </div>
-              <button
-                type="button"
-                onClick={() => setEditingTask(null)}
-                className="p-2 rounded-lg hover:bg-gray-100"
-                aria-label="Close"
-              >
-                <X className="w-5 h-5 text-gray-600" />
-              </button>
-            </div>
-
-            <div className="p-5 space-y-4">
-              <div>
-                <label className="block text-sm text-gray-700 mb-2">Start Date</label>
-                <input
-                  type="date"
-                  value={draftStartDate}
-                  onChange={(event) => setDraftStartDate(event.target.value)}
-                  className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent"
-                />
-              </div>
-              <div>
-                <label className="block text-sm text-gray-700 mb-2">End Date</label>
-                <input
-                  type="date"
-                  value={draftEndDate}
-                  min={draftStartDate}
-                  onChange={(event) => setDraftEndDate(event.target.value)}
-                  className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent"
-                />
-              </div>
-            </div>
-
-            <div className="px-5 py-4 border-t border-gray-200 flex items-center justify-end gap-2">
-              <button
-                type="button"
-                onClick={() => setEditingTask(null)}
-                className="px-4 py-2 rounded-lg text-gray-700 hover:bg-gray-100"
-              >
-                Cancel
-              </button>
-              <button
-                type="button"
-                onClick={handleSaveTimeline}
-                disabled={savingTaskId === editingTask.id}
-                className="px-4 py-2 rounded-lg bg-blue-600 text-white hover:bg-blue-700 disabled:opacity-50 flex items-center gap-2"
-              >
-                {savingTaskId === editingTask.id ? <Loader2 className="w-4 h-4 animate-spin" /> : <Save className="w-4 h-4" />}
-                Save
-              </button>
-            </div>
-          </div>
-        </div>
-      )}
     </div>
   );
 }
