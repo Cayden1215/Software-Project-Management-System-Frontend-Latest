@@ -1,8 +1,8 @@
-﻿import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { useCallback, useEffect, useMemo, useState } from 'react';
+import { AlertCircle, CalendarDays, Link2, Loader2, RefreshCw, Save, X } from 'lucide-react';
 import { Project, Task } from '../App';
-import { taskAPI } from '../services/api-client';
+import { taskAssignmentAPI, type TaskAssignmentDto } from '../services/api-client';
 import { toast } from 'sonner';
-import { Gantt, Willow } from '@svar-ui/react-gantt';
 
 interface GanttChartViewProps {
   project: Project;
@@ -10,447 +10,498 @@ interface GanttChartViewProps {
   onUpdateProject: (project: Project) => void;
 }
 
-class GanttErrorBoundary extends React.Component<
-  { onReset?: () => void; children: React.ReactNode },
-  { hasError: boolean; error?: unknown }
-> {
-  static getDerivedStateFromError(error: unknown) {
-    return { hasError: true, error };
-  }
-
-  constructor(props: { onReset?: () => void; children: React.ReactNode }) {
-    super(props);
-    this.state = { hasError: false, error: undefined };
-  }
-
-  componentDidCatch(error: unknown) {
-    console.error('Gantt crashed:', error);
-  }
-
-  private handleReset = () => {
-    this.setState({ hasError: false, error: undefined });
-    this.props.onReset?.();
-  };
-
-  render() {
-    if (!this.state.hasError) return this.props.children;
-
-    return (
-      <div className="h-full w-full flex flex-col items-center justify-center gap-3 p-6 text-center">
-        <div className="text-sm text-gray-700">
-          The Gantt chart hit a rendering error. Try reloading the chart.
-        </div>
-        <button
-          type="button"
-          className="px-3 py-2 rounded-md bg-blue-600 text-white text-sm hover:bg-blue-700"
-          onClick={this.handleReset}
-        >
-          Reload Gantt
-        </button>
-      </div>
-    );
-  }
-}
-
-type GanttTask = {
-  id: string | number;
-  text: string;
+type TimelineTask = Task & {
   start: Date;
-  end?: Date;
-  duration?: number;
-  progress?: number;
-  parent?: string | number;
-  type?: 'task' | 'summary' | 'milestone';
-  lazy?: boolean;
+  end: Date;
+  durationDays: number;
+  offsetDays: number;
+  assignment?: TaskAssignmentDto;
 };
 
-type GanttLink = {
-  id: string | number;
-  source: string | number;
-  target: string | number;
-  type: string;
-};
+const dayMs = 1000 * 60 * 60 * 24;
+const minColumnWidth = 42;
+const taskRowHeight = 58;
 
-const parseIsoDate = (value?: string): Date | null => {
+const parseDate = (value?: string): Date | null => {
   if (!value) return null;
-  const parsed = new Date(value);
+  const parsed = new Date(value.includes('T') ? value : `${value}T00:00:00`);
   return Number.isNaN(parsed.getTime()) ? null : parsed;
 };
 
-const toIsoDate = (date: Date): string => {
-  return date.toISOString().split('T')[0] || '';
+const normalizeDate = (date: Date): Date => {
+  return new Date(date.getFullYear(), date.getMonth(), date.getDate());
 };
 
-const clampDurationDays = (value: number): number => {
-  if (!Number.isFinite(value)) return 1;
-  return Math.max(1, Math.round(value));
+const addDays = (date: Date, days: number): Date => {
+  const next = new Date(date);
+  next.setDate(next.getDate() + days);
+  return next;
 };
 
-const convertTaskStatus = (status: string | undefined): Task['status'] => {
-  switch ((status || '').toLowerCase()) {
-    case 'todo':
-      return 'todo';
-    case 'in-progress':
-    case 'inprogress':
-      return 'in-progress';
-    case 'review':
-      return 'review';
+const diffDays = (start: Date, end: Date): number => {
+  return Math.round((normalizeDate(end).getTime() - normalizeDate(start).getTime()) / dayMs);
+};
+
+const toDateInputValue = (date: Date): string => {
+  const year = date.getFullYear();
+  const month = String(date.getMonth() + 1).padStart(2, '0');
+  const day = String(date.getDate()).padStart(2, '0');
+  return `${year}-${month}-${day}`;
+};
+
+const durationFromDates = (start: Date, end: Date): number => {
+  return Math.max(1, diffDays(start, end) || 1);
+};
+
+const convertTaskAssignmentDto = (dto: TaskAssignmentDto, fallbackTask?: Task): Task => {
+  const taskId = dto.taskID?.toString() || fallbackTask?.id || dto.assignmentID?.toString() || '';
+  const startDate = dto.scheduledStartDate || fallbackTask?.startDate;
+  const endDate = dto.scheduledEndDate || fallbackTask?.endDate;
+
+  return {
+    id: taskId,
+    title: dto.taskName || fallbackTask?.title || 'Untitled Task',
+    description: fallbackTask?.description || '',
+    status: fallbackTask?.status || 'todo',
+    assignee: dto.assignedMemberNames?.join(', ') || fallbackTask?.assignee,
+    assignedMemberIds: dto.assignedMemberIds || fallbackTask?.assignedMemberIds || [],
+    requiredSkills: fallbackTask?.requiredSkills || [],
+    skillIDs: fallbackTask?.skillIDs || [],
+    startDate,
+    endDate,
+    estimatedDuration: fallbackTask?.estimatedDuration || 1,
+    requiredMemberNum: dto.requiredMemberNum ?? fallbackTask?.requiredMemberNum ?? 1,
+    dependencies: fallbackTask?.dependencies || [],
+    sprintId: fallbackTask?.sprintId,
+    storyPoints: fallbackTask?.storyPoints,
+  };
+};
+
+const getStatusClasses = (status: Task['status']) => {
+  switch (status) {
     case 'done':
-      return 'done';
+      return {
+        bar: 'bg-emerald-600',
+        badge: 'bg-emerald-50 text-emerald-700 border-emerald-200',
+        label: 'Done',
+      };
+    case 'in-progress':
+      return {
+        bar: 'bg-blue-600',
+        badge: 'bg-blue-50 text-blue-700 border-blue-200',
+        label: 'In Progress',
+      };
+    case 'review':
+      return {
+        bar: 'bg-amber-500',
+        badge: 'bg-amber-50 text-amber-700 border-amber-200',
+        label: 'Review',
+      };
+    case 'todo':
     default:
-      return 'todo';
+      return {
+        bar: 'bg-slate-500',
+        badge: 'bg-slate-50 text-slate-700 border-slate-200',
+        label: 'To Do',
+      };
   }
-};
-
-const areTasksEqualForGanttRefresh = (a: Task[], b: Task[]): boolean => {
-  if (a === b) return true;
-  if (a.length !== b.length) return false;
-  for (let i = 0; i < a.length; i++) {
-    const at = a[i];
-    const bt = b[i];
-    if (at.id !== bt.id) return false;
-    if (at.title !== bt.title) return false;
-    if (at.description !== bt.description) return false;
-    if (at.status !== bt.status) return false;
-    if (at.assignee !== bt.assignee) return false;
-    const aAssignedIds = at.assignedMemberIds || [];
-    const bAssignedIds = bt.assignedMemberIds || [];
-    if (aAssignedIds.length !== bAssignedIds.length) return false;
-    for (let j = 0; j < aAssignedIds.length; j++) if (aAssignedIds[j] !== bAssignedIds[j]) return false;
-    if (at.startDate !== bt.startDate) return false;
-    if (at.endDate !== bt.endDate) return false;
-    if ((at.estimatedDuration || 0) !== (bt.estimatedDuration || 0)) return false;
-    if ((at.requiredMemberNum || 0) !== (bt.requiredMemberNum || 0)) return false;
-    if ((at.sprintId || '') !== (bt.sprintId || '')) return false;
-
-    const adeps = at.dependencies || [];
-    const bdeps = bt.dependencies || [];
-    if (adeps.length !== bdeps.length) return false;
-    for (let j = 0; j < adeps.length; j++) if (adeps[j] !== bdeps[j]) return false;
-  }
-  return true;
 };
 
 export function GanttChartView({ project, isManager, onUpdateProject }: GanttChartViewProps) {
-  const [saving, setSaving] = useState(false);
-  const savingRef = useRef(false);
-  const projectRef = useRef(project);
-  const ganttApiRef = useRef<any>(null);
-  const [ganttKey, setGanttKey] = useState(0);
+  const [tasks, setTasks] = useState<Task[]>(project.tasks || []);
+  const [assignments, setAssignments] = useState<TaskAssignmentDto[]>([]);
+  const [loading, setLoading] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const [savingTaskId, setSavingTaskId] = useState<string | null>(null);
+  const [editingTask, setEditingTask] = useState<TimelineTask | null>(null);
+  const [draftStartDate, setDraftStartDate] = useState('');
+  const [draftEndDate, setDraftEndDate] = useState('');
+  const [lastRefresh, setLastRefresh] = useState<Date>(new Date());
 
-  useEffect(() => {
-    projectRef.current = project;
-  }, [project]);
-
-  const refreshProjectTasks = useCallback(async () => {
-    const projectId = Number(projectRef.current.id);
+  const refreshTasks = useCallback(async () => {
+    const projectId = Number(project.id);
     if (!Number.isFinite(projectId) || projectId <= 0) return;
 
-    const taskDtos = await taskAPI.getProjectTasks(projectId);
-    const convertedTasks: Task[] = taskDtos.map((dto) => ({
-      id: dto.taskID?.toString() || '',
-      title: dto.taskName,
-      description: dto.description,
-      status: convertTaskStatus(dto.taskStatus),
-      assignee: dto.assignee,
-      assignedMemberIds: dto.assignedMemberIds || [],
-      requiredSkills: dto.requiredSkills || [],
-      skillIDs: dto.skillIDs || [],
-      startDate: dto.startDate,
-      endDate: dto.endDate,
-      estimatedDuration: dto.estimatedDuration || 0,
-      requiredMemberNum: dto.requiredMemberNum ?? 1,
-      dependencies: (dto.dependencyIds || []).map((depId) => depId.toString()),
-      sprintId: dto.sprintID?.toString(),
-      storyPoints: dto.storyPoints,
-    }));
+    setLoading(true);
+    setError(null);
 
-    if (areTasksEqualForGanttRefresh(projectRef.current.tasks, convertedTasks)) return;
-    onUpdateProject({ ...projectRef.current, tasks: convertedTasks });
-  }, [onUpdateProject]);
+    try {
+      const assignmentDtos = await taskAssignmentAPI.getTaskAssignments(projectId);
+      const projectTaskById = new Map((project.tasks || []).map((task) => [task.id, task]));
+      const nextTasks = assignmentDtos
+        .map((assignment) => convertTaskAssignmentDto(
+          assignment,
+          assignment.taskID != null ? projectTaskById.get(String(assignment.taskID)) : undefined,
+        ))
+        .filter((task) => task.id);
 
+      setAssignments(assignmentDtos);
+      setTasks(nextTasks);
+      setLastRefresh(new Date());
+      onUpdateProject({ ...project, tasks: nextTasks });
+    } catch (err: any) {
+      console.error('Failed to load Gantt task assignments:', err);
+      const message = err?.message || 'Failed to load Gantt data from task assignments API';
+      setError(message);
+      toast.error(message);
+    } finally {
+      setLoading(false);
+    }
+  }, [onUpdateProject, project]);
+
+  // Initial fetch on component mount
   useEffect(() => {
-    // Ensure we start from backend truth (important if tasks were edited elsewhere)
-    refreshProjectTasks().catch((err: any) => {
-      console.error('Failed to load project tasks for Gantt:', err);
-      toast.error(err?.message || 'Failed to load project tasks');
-    });
-  }, [project.id, refreshProjectTasks]);
+    refreshTasks();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [project.id]);
 
-  const { ganttTasks, ganttLinks } = useMemo(() => {
-    const dayMs = 1000 * 60 * 60 * 24;
-    const normalizeDay = (date: Date): Date => new Date(Date.UTC(date.getUTCFullYear(), date.getUTCMonth(), date.getUTCDate()));
+  // Set up real-time polling - refresh every 30 seconds
+  useEffect(() => {
+    const projectId = Number(project.id);
+    if (!Number.isFinite(projectId) || projectId <= 0) return;
 
-    const tasks: GanttTask[] = project.tasks
-      .map((t) => {
-        const idNum = Number(t.id);
-        if (!Number.isFinite(idNum) || idNum <= 0) return null;
+    const pollingInterval = setInterval(() => {
+      refreshTasks();
+    }, 30000); // 30 seconds polling interval
 
-        const fallbackStart = parseIsoDate(project.createdAt) ?? new Date();
-        const start = normalizeDay(parseIsoDate(t.startDate) ?? fallbackStart);
-        const end =
-          parseIsoDate(t.endDate) ??
-          (() => {
-            const computed = new Date(start);
-            computed.setDate(computed.getDate() + clampDurationDays(t.estimatedDuration || 1));
-            return computed;
-          })();
+    return () => clearInterval(pollingInterval);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [project.id]);
 
-        if (Number.isNaN(start.getTime()) || Number.isNaN(end.getTime())) return null;
+  const timeline = useMemo(() => {
+    const projectStart = parseDate(project.createdAt) || new Date();
+    const baseStart = normalizeDate(projectStart);
 
-        const duration = clampDurationDays(Math.ceil((end.getTime() - start.getTime()) / dayMs));
+    const timelineTasks: TimelineTask[] = tasks
+      .filter((task) => task.id)
+      .map((task) => {
+        const start = normalizeDate(parseDate(task.startDate) || baseStart);
+        const fallbackDuration = Math.max(1, Math.round(task.estimatedDuration || 1));
+        const endFromApi = parseDate(task.endDate);
+        const end = normalizeDate(endFromApi || addDays(start, fallbackDuration));
+        const safeEnd = end <= start ? addDays(start, fallbackDuration) : end;
 
         return {
-          id: idNum,
-          text: t.title,
+          ...task,
+          assignment: assignments.find((assignment) => assignment.taskID != null && String(assignment.taskID) === task.id),
           start,
-          end,
-          duration,
-          progress: 0,
-          parent: 0,
-          type: 'task',
-          lazy: false,
+          end: safeEnd,
+          durationDays: durationFromDates(start, safeEnd),
+          offsetDays: 0,
         };
       })
-      .filter(Boolean) as GanttTask[];
+      .sort((a, b) => a.start.getTime() - b.start.getTime() || a.title.localeCompare(b.title));
 
-    const links: GanttLink[] = [];
-    let linkId = 1;
-    for (const t of project.tasks) {
-      const target = Number(t.id);
-      if (!Number.isFinite(target) || target <= 0) continue;
-      for (const depId of t.dependencies || []) {
-        const source = Number(depId);
-        if (!Number.isFinite(source) || source <= 0) continue;
-        links.push({ id: linkId++, source, target, type: 'e2s' });
-      }
+    if (timelineTasks.length === 0) {
+      return { tasks: [], days: [], start: baseStart, totalDays: 0 };
     }
 
-    return { ganttTasks: tasks, ganttLinks: links };
-  }, [project.createdAt, project.tasks]);
+    const minStart = new Date(Math.min(...timelineTasks.map((task) => task.start.getTime())));
+    const maxEnd = new Date(Math.max(...timelineTasks.map((task) => task.end.getTime())));
+    const start = addDays(normalizeDate(minStart), -2);
+    const end = addDays(normalizeDate(maxEnd), 4);
+    const totalDays = Math.max(1, diffDays(start, end));
+    const days = Array.from({ length: totalDays + 1 }, (_, index) => addDays(start, index));
 
-  const init = useCallback(
-    (api: any) => {
-      // `init` may be called multiple times by the Gantt component; avoid registering handlers repeatedly.
-      if (ganttApiRef.current === api) return;
-      ganttApiRef.current = api;
+    return {
+      tasks: timelineTasks.map((task) => ({ ...task, offsetDays: diffDays(start, task.start) })),
+      days,
+      start,
+      totalDays,
+    };
+  }, [assignments, project.createdAt, tasks]);
 
-      api.intercept?.('add-task', (ev: any) => {
-        if (!isManager) return false;
+  const taskById = useMemo(() => {
+    return new Map(tasks.map((task) => [task.id, task]));
+  }, [tasks]);
 
-        const projectId = Number(projectRef.current.id);
-        if (!Number.isFinite(projectId) || projectId <= 0) return false;
-        if (savingRef.current) return false;
+  const openEditDialog = (task: TimelineTask) => {
+    setEditingTask(task);
+    setDraftStartDate(toDateInputValue(task.start));
+    setDraftEndDate(toDateInputValue(task.end));
+  };
 
-        try {
-          const textRaw = ev?.task?.text;
-          const text = typeof textRaw === 'string' && textRaw.trim().length > 0 ? textRaw.trim() : 'New Task';
-          const start = new Date();
-          const duration = 1;
-          const startDate = toIsoDate(start);
-          const end = new Date(start);
-          end.setDate(end.getDate() + duration);
-          const endDate = toIsoDate(end);
+  const handleSaveTimeline = async () => {
+    if (!editingTask) return;
 
-          savingRef.current = true;
-          setSaving(true);
+    const projectId = Number(project.id);
+    const taskId = Number(editingTask.id);
+    const start = parseDate(draftStartDate);
+    const end = parseDate(draftEndDate);
 
-          void (async () => {
-            try {
-              await taskAPI.createTask(projectId, {
-                taskName: text,
-                description: '',
-                taskStatus: 'todo',
-                priority: 'medium',
-                estimatedDuration: duration,
-                requiredMemberNum: 1,
-                requiredSkills: [],
-                skillIDs: [],
-                startDate,
-                endDate,
-                dependencyIds: [],
-              });
-              await refreshProjectTasks();
-              toast.success('Task added');
-            } catch (err: any) {
-              console.error('Failed to add task from Gantt:', err);
-              toast.error(err?.message || 'Failed to add task');
-            } finally {
-              savingRef.current = false;
-              setSaving(false);
-            }
-          })();
-        } catch (err: any) {
-          console.error('Failed to handle add-task safely:', err);
-          toast.error(err?.message || 'Failed to add task');
-          savingRef.current = false;
-          setSaving(false);
-        }
+    if (!Number.isFinite(projectId) || projectId <= 0 || !Number.isFinite(taskId) || taskId <= 0) return;
+    if (!start || !end) {
+      toast.error('Start date and end date are required');
+      return;
+    }
+    if (end <= start) {
+      toast.error('End date must be after start date');
+      return;
+    }
 
-        // Prevent the default internal "partial task" insertion that can crash rendering.
-        return false;
+    setSavingTaskId(editingTask.id);
+    try {
+      await taskAssignmentAPI.updateTaskAssignment(projectId, taskId, {
+        ...(editingTask.assignment || {}),
+        taskID: taskId,
+        taskName: editingTask.title,
+        projectID: projectId,
+        requiredMemberNum: editingTask.requiredMemberNum,
+        assignedMemberIds: editingTask.assignedMemberIds || [],
+        scheduledStartDate: draftStartDate,
+        scheduledEndDate: draftEndDate,
       });
+      await refreshTasks();
+      setEditingTask(null);
+      toast.success('Gantt assignment schedule updated');
+    } catch (err: any) {
+      console.error('Failed to save Gantt assignment schedule:', err);
+      toast.error(err?.message || 'Failed to save Gantt assignment schedule');
+    } finally {
+      setSavingTaskId(null);
+    }
+  };
 
-      api.on('add-link', async (ev: any) => {
-        if (!isManager) return;
-
-        const projectId = Number(projectRef.current.id);
-        const source = Number(ev?.link?.source);
-        const target = Number(ev?.link?.target);
-        if (!Number.isFinite(projectId) || projectId <= 0) return;
-        if (!Number.isFinite(source) || source <= 0) return;
-        if (!Number.isFinite(target) || target <= 0) return;
-
-        const existingTarget = projectRef.current.tasks.find((t) => t.id === String(target));
-        if (existingTarget && (existingTarget.dependencies || []).includes(String(source))) return;
-
-        if (savingRef.current) return;
-        savingRef.current = true;
-        setSaving(true);
-
-        try {
-          const current = await taskAPI.getTaskById(projectId, target);
-          const deps = Array.from(new Set([...(current.dependencyIds || []), source]));
-          await taskAPI.updateTask(projectId, target, {
-            ...current,
-            taskID: target,
-            projectID: projectId,
-            dependencyIds: deps,
-          });
-          await refreshProjectTasks();
-          toast.success('Dependency saved');
-        } catch (err: any) {
-          console.error('Failed to persist dependency change:', err);
-          toast.error(err?.message || 'Failed to save dependency change');
-        } finally {
-          savingRef.current = false;
-          setSaving(false);
-        }
-      });
-
-      api.on('update-task', async (ev: any) => {
-        if (!isManager) return;
-        if (ev?.inProgress) return;
-
-        const projectId = Number(projectRef.current.id);
-        const taskId = Number(ev?.id);
-        if (!Number.isFinite(projectId) || projectId <= 0) return;
-        if (!Number.isFinite(taskId) || taskId <= 0) return;
-
-        const patch = (ev?.task || {}) as Partial<GanttTask>;
-        const hasDates = patch.start instanceof Date || patch.end instanceof Date || typeof patch.duration === 'number';
-
-        if (!hasDates && typeof patch.text !== 'string') return;
-
-        if (savingRef.current) return;
-        savingRef.current = true;
-        setSaving(true);
-
-        try {
-          if (hasDates) {
-            const start = patch.start instanceof Date ? patch.start : null;
-            const end = patch.end instanceof Date ? patch.end : null;
-            const duration = typeof patch.duration === 'number' ? clampDurationDays(patch.duration) : undefined;
-
-            if (!start || !end) return;
-
-            const startDate = toIsoDate(start);
-            const endDate = toIsoDate(end);
-            if (!startDate || !endDate) return;
-
-            const existing = projectRef.current.tasks.find((t) => t.id === String(taskId));
-            if (
-              existing &&
-              existing.startDate === startDate &&
-              existing.endDate === endDate &&
-              (typeof duration !== 'number' || (existing.estimatedDuration || 0) === duration)
-            ) {
-              return;
-            }
-
-            await taskAPI.updateTaskTimeline(projectId, taskId, {
-              startDate,
-              endDate,
-              ...(typeof duration === 'number' ? { estimatedDuration: duration } : {}),
-            });
-          } else if (typeof patch.text === 'string') {
-            const existing = projectRef.current.tasks.find((t) => t.id === String(taskId));
-            if (!existing) return;
-            if (existing.title === patch.text) return;
-            await taskAPI.updateTask(projectId, taskId, {
-              taskID: taskId,
-              projectID: projectId,
-              taskName: patch.text,
-              description: existing.description,
-              taskStatus: existing.status,
-              priority: 'medium',
-              estimatedDuration: existing.estimatedDuration,
-              requiredMemberNum: existing.requiredMemberNum,
-              assignee: existing.assignee,
-              assignedMemberIds: existing.assignedMemberIds || [],
-              requiredSkills: existing.requiredSkills,
-              skillIDs: existing.skillIDs,
-              startDate: existing.startDate,
-              endDate: existing.endDate,
-              dependencyIds: (existing.dependencies || []).map((d) => Number(d)).filter((d) => Number.isFinite(d)),
-              sprintID: existing.sprintId ? Number(existing.sprintId) : undefined,
-              storyPoints: existing.storyPoints,
-            });
-          }
-
-          await refreshProjectTasks();
-          toast.success('Gantt saved');
-        } catch (err: any) {
-          console.error('Failed to persist Gantt change:', err);
-          toast.error(err?.message || 'Failed to save Gantt change');
-        } finally {
-          savingRef.current = false;
-          setSaving(false);
-        }
-      });
-    },
-    [isManager, refreshProjectTasks],
-  );
-
-  const scales = useMemo(() => {
-    return [
-      { unit: 'month', step: 1, format: '%F %Y' },
-      { unit: 'day', step: 1, format: '%j' },
-    ];
-  }, []);
-  const markers = useMemo(() => [], []);
-  const selected = useMemo(() => [], []);
-  const schedule = useMemo(() => ({ type: 'forward' }), []);
+  const chartWidth = Math.max(900, (timeline.days.length || 1) * minColumnWidth);
+  const rowAreaHeight = Math.max(180, timeline.tasks.length * taskRowHeight);
+  const sidebarWidth = 320;
+  const ganttContentWidth = sidebarWidth + chartWidth;
 
   return (
     <div className="bg-white border border-gray-200 rounded-xl overflow-hidden">
-      <div className="px-4 py-3 border-b border-gray-200 flex items-center justify-between">
+      <div className="px-4 py-3 border-b border-gray-200 flex flex-wrap items-center justify-between gap-3">
         <div>
-          <h2 className="text-gray-900 text-lg font-semibold">Gantt Chart</h2>
+          <h2 className="text-gray-900 text-lg font-semibold flex items-center gap-2">
+            <CalendarDays className="w-5 h-5 text-blue-600" />
+            Gantt Chart
+          </h2>
           <p className="text-sm text-gray-600">
-            Drag tasks to change dates{isManager ? ' (auto-saves)' : ''}.
+            Task timeline auto-synced from task assignments API{isManager ? ' with live editing.' : '.'}
+            {' '}
+            <span className="inline-flex items-center gap-1 text-xs text-gray-500">
+              Last refresh: {lastRefresh.toLocaleTimeString()}
+            </span>
           </p>
         </div>
-        {saving && <span className="text-sm text-gray-600">Saving…</span>}
+        <button
+          type="button"
+          onClick={refreshTasks}
+          disabled={loading}
+          className="px-3 py-2 rounded-lg border border-gray-300 text-gray-700 hover:bg-gray-50 disabled:opacity-50 flex items-center gap-2"
+          title="Manually refresh Gantt data (auto-refreshes every 30 seconds)"
+        >
+          <RefreshCw className={`w-4 h-4 ${loading ? 'animate-spin' : ''}`} />
+          {loading ? 'Syncing...' : 'Refresh'}
+        </button>
       </div>
-      <div className="h-[70vh]">
-        <Willow>
-          <GanttErrorBoundary onReset={() => setGanttKey((k) => k + 1)}>
-            <Gantt
-              key={ganttKey}
-              tasks={ganttTasks}
-              links={ganttLinks}
-              markers={markers}
-              selected={selected}
-              scales={scales}
-              schedule={schedule}
-              init={init}
-              readonly={!isManager}
-              start={ganttTasks[0]?.start}
-            />
-          </GanttErrorBoundary>
-        </Willow>
+
+      {error && (
+        <div className="m-4 p-4 rounded-lg border border-red-200 bg-red-50 text-red-700 flex items-center gap-2">
+          <AlertCircle className="w-5 h-5 flex-shrink-0" />
+          <span>{error}</span>
+        </div>
+      )}
+
+      {loading && timeline.tasks.length === 0 ? (
+        <div className="h-[55vh] flex flex-col items-center justify-center gap-3 text-gray-600">
+          <Loader2 className="w-8 h-8 animate-spin text-blue-600" />
+          <span>Fetching Gantt data from task assignments API...</span>
+        </div>
+      ) : timeline.tasks.length === 0 ? (
+        <div className="h-[55vh] flex flex-col items-center justify-center gap-3 p-6 text-center">
+          <AlertCircle className="w-10 h-10 text-gray-400" />
+          <div>
+            <h3 className="text-gray-900 font-medium">No Gantt Data</h3>
+            <p className="text-gray-600 text-sm mt-1">No task assignments were returned by the task assignments API.</p>
+          </div>
+        </div>
+      ) : (
+        <div className="overflow-auto">
+          <div className="flex" style={{ width: ganttContentWidth }}>
+              <div className="sticky left-0 z-20 w-[320px] flex-none bg-gray-50 border-r border-gray-200 shadow-[1px_0_0_rgba(229,231,235,1)]">
+                <div className="h-16 px-4 flex items-center border-b border-gray-200">
+                  <div>
+                    <div className="text-sm font-medium text-gray-900">Tasks</div>
+                    <div className="text-xs text-gray-500">
+                      {timeline.tasks.length} task assignment{timeline.tasks.length === 1 ? '' : 's'} from API
+                    </div>
+                  </div>
+                </div>
+                {timeline.tasks.map((task) => {
+                  const status = getStatusClasses(task.status);
+                  const dependencies = task.dependencies.map((id) => taskById.get(id)).filter(Boolean) as Task[];
+
+                  return (
+                    <div key={task.id} className="h-[58px] px-4 border-b border-gray-100 flex items-center gap-3">
+                      <div className={`w-2 h-9 rounded-full ${status.bar}`} />
+                      <div className="min-w-0 flex-1">
+                        <div className="text-sm font-medium text-gray-900 truncate">{task.title}</div>
+                        <div className="mt-1 flex items-center gap-2 text-xs text-gray-500">
+                          <span className={`px-2 py-0.5 rounded-full border ${status.badge}`}>{status.label}</span>
+                          <span>{task.durationDays} day{task.durationDays === 1 ? '' : 's'}</span>
+                        </div>
+                      </div>
+                      {dependencies.length > 0 && (
+                        <span title={`Depends on: ${dependencies.map((dep) => dep.title).join(', ')}`}>
+                          <Link2 className="w-4 h-4 text-gray-400" />
+                        </span>
+                      )}
+                    </div>
+                  );
+                })}
+              </div>
+
+              <div className="flex-none" style={{ width: chartWidth }}>
+                <div className="h-16 border-b border-gray-200 bg-gray-50 grid" style={{ gridTemplateColumns: `repeat(${timeline.days.length}, ${minColumnWidth}px)` }}>
+                  {timeline.days.map((day, index) => {
+                    const isMonthStart = day.getDate() === 1;
+                    const isWeekend = day.getDay() === 0 || day.getDay() === 6;
+
+                    return (
+                      <div
+                        key={day.toISOString()}
+                        className={`border-r border-gray-200 px-1 py-2 text-center ${isWeekend ? 'bg-gray-100' : ''}`}
+                      >
+                        <div className="text-[11px] font-medium text-gray-700">{day.getDate()}</div>
+                        <div className="text-[10px] text-gray-500">
+                          {isMonthStart || index === 0
+                            ? day.toLocaleDateString('en-US', { month: 'short' })
+                            : day.toLocaleDateString('en-US', { weekday: 'short' }).slice(0, 1)}
+                        </div>
+                      </div>
+                    );
+                  })}
+                </div>
+
+                <div className="relative" style={{ height: rowAreaHeight }}>
+                  <div className="absolute inset-0 grid" style={{ gridTemplateColumns: `repeat(${timeline.days.length}, ${minColumnWidth}px)` }}>
+                    {timeline.days.map((day) => {
+                      const isWeekend = day.getDay() === 0 || day.getDay() === 6;
+                      return (
+                        <div
+                          key={day.toISOString()}
+                          className={`border-r border-b border-gray-100 ${isWeekend ? 'bg-gray-50' : 'bg-white'}`}
+                        />
+                      );
+                    })}
+                  </div>
+
+                  {timeline.tasks.map((task, index) => {
+                    const status = getStatusClasses(task.status);
+                    const left = task.offsetDays * minColumnWidth;
+                    const width = Math.max(minColumnWidth, task.durationDays * minColumnWidth);
+                    const top = index * taskRowHeight + 12;
+                    const isSaving = savingTaskId === task.id;
+
+                    return (
+                      <div
+                        key={task.id}
+                        className={`absolute h-9 rounded-md shadow-sm ${status.bar} text-white group`}
+                        style={{ left, top, width }}
+                        title={`${task.title}: ${toDateInputValue(task.start)} to ${toDateInputValue(task.end)}`}
+                      >
+                        <div className="h-full flex items-center justify-between gap-2 px-3">
+                          <span className="text-xs font-medium truncate">{task.title}</span>
+                          {isManager && (
+                            <button
+                              type="button"
+                              onClick={() => openEditDialog(task)}
+                              disabled={isSaving}
+                              className="opacity-0 group-hover:opacity-100 focus:opacity-100 p-1 rounded hover:bg-white/20 disabled:opacity-50"
+                              title="Edit dates"
+                            >
+                              {isSaving ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <CalendarDays className="w-3.5 h-3.5" />}
+                            </button>
+                          )}
+                        </div>
+                      </div>
+                    );
+                  })}
+                </div>
+              </div>
+          </div>
+        </div>
+      )}
+
+      <div className="px-4 py-3 border-t border-gray-200 flex flex-wrap items-center justify-between gap-3 text-sm">
+        <div className="flex flex-wrap items-center gap-4">
+          {(['todo', 'in-progress', 'review', 'done'] as Task['status'][]).map((statusKey) => {
+            const status = getStatusClasses(statusKey);
+            return (
+              <div key={statusKey} className="flex items-center gap-2 text-gray-600">
+                <div className={`w-3 h-3 rounded ${status.bar}`} />
+                <span>{status.label}</span>
+              </div>
+            );
+          })}
+        </div>
+        <div className="text-gray-500 flex items-center gap-2">
+          <div className="w-2 h-2 rounded-full bg-green-500 animate-pulse" />
+          Real-time API sync • Auto-refresh every 30s
+        </div>
       </div>
+
+      {editingTask && (
+        <div className="fixed inset-0 z-50 bg-black/50 flex items-center justify-center p-4">
+          <div className="bg-white rounded-lg w-full max-w-md shadow-xl">
+            <div className="px-5 py-4 border-b border-gray-200 flex items-center justify-between">
+              <div>
+                <h3 className="text-gray-900 font-semibold">Edit Gantt Dates</h3>
+                <p className="text-sm text-gray-500 truncate max-w-[320px]">{editingTask.title}</p>
+              </div>
+              <button
+                type="button"
+                onClick={() => setEditingTask(null)}
+                className="p-2 rounded-lg hover:bg-gray-100"
+                aria-label="Close"
+              >
+                <X className="w-5 h-5 text-gray-600" />
+              </button>
+            </div>
+
+            <div className="p-5 space-y-4">
+              <div>
+                <label className="block text-sm text-gray-700 mb-2">Start Date</label>
+                <input
+                  type="date"
+                  value={draftStartDate}
+                  onChange={(event) => setDraftStartDate(event.target.value)}
+                  className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent"
+                />
+              </div>
+              <div>
+                <label className="block text-sm text-gray-700 mb-2">End Date</label>
+                <input
+                  type="date"
+                  value={draftEndDate}
+                  min={draftStartDate}
+                  onChange={(event) => setDraftEndDate(event.target.value)}
+                  className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent"
+                />
+              </div>
+            </div>
+
+            <div className="px-5 py-4 border-t border-gray-200 flex items-center justify-end gap-2">
+              <button
+                type="button"
+                onClick={() => setEditingTask(null)}
+                className="px-4 py-2 rounded-lg text-gray-700 hover:bg-gray-100"
+              >
+                Cancel
+              </button>
+              <button
+                type="button"
+                onClick={handleSaveTimeline}
+                disabled={savingTaskId === editingTask.id}
+                className="px-4 py-2 rounded-lg bg-blue-600 text-white hover:bg-blue-700 disabled:opacity-50 flex items-center gap-2"
+              >
+                {savingTaskId === editingTask.id ? <Loader2 className="w-4 h-4 animate-spin" /> : <Save className="w-4 h-4" />}
+                Save
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }
