@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useState } from 'react';
 import { Project, Task } from '../App';
-import { ArrowRight, AlertCircle, Sparkles, X, Plus, Edit2, Search, Loader2 } from 'lucide-react';
+import { AlertCircle, Sparkles, X, Plus, Edit2, Search, Loader2 } from 'lucide-react';
 import { AIScheduler } from './ai-scheduler';
 import { projectAPI, schedulerAPI, type TaskAssignmentDto } from '../services/api-client';
 import { toast } from 'sonner';
@@ -455,29 +455,6 @@ export function TimelineView({ project, isManager, onUpdateProject }: TimelineVi
                         </div>
                       </div>
 
-                      {/* Dependency arrows */}
-                      {dependencies.map(dep => {
-                        if (!dep.startDate) return null;
-                        const depEnd = new Date(dep.startDate);
-                        depEnd.setDate(depEnd.getDate() + dep.estimatedDuration);
-                        const taskStart = task.startDate as Date;
-                        
-                        if (depEnd < taskStart) {
-                          return (
-                            <div
-                              key={dep.id}
-                              className="absolute top-1/2 h-0.5 bg-gray-400 pointer-events-none"
-                              style={{
-                                left: getTaskPosition(depEnd, 0).left,
-                                width: `calc(${position.left} - ${getTaskPosition(depEnd, 0).left})`,
-                              }}
-                            >
-                              <ArrowRight className="absolute right-0 top-1/2 -translate-y-1/2 w-3 h-3 text-gray-400" />
-                            </div>
-                          );
-                        }
-                        return null;
-                      })}
                     </div>
                   </div>
                 );

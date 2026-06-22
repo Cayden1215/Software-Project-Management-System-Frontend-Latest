@@ -321,8 +321,8 @@ export const taskAssignmentAPI = {
   },
 
   async updateTaskAssignment(projectId: number, taskId: number, data: TaskAssignmentDto): Promise<TaskAssignmentDto> {
-    return apiRequest<TaskAssignmentDto>(`/api/v1/project/${projectId}/tasks/assignments/${taskId}`, {
-      method: 'PUT',
+    return apiRequest<TaskAssignmentDto>(`/api/v1/project/${projectId}/tasks/assignments/${taskId}/manual`, {
+      method: 'POST',
       body: JSON.stringify(data),
     });
   },

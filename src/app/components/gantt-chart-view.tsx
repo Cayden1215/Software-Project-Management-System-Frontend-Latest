@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import { AlertCircle, CalendarDays, Link2, Loader2, RefreshCw, Save, X } from 'lucide-react';
 import { Project, Task } from '../App';
-import { taskAssignmentAPI, type TaskAssignmentDto } from '../services/api-client';
+import { schedulerAPI, taskAssignmentAPI, type TaskAssignmentDto } from '../services/api-client';
 import { toast } from 'sonner';
 
 interface GanttChartViewProps {
@@ -241,13 +241,8 @@ export function GanttChartView({ project, isManager, onUpdateProject }: GanttCha
 
     setSavingTaskId(editingTask.id);
     try {
-      await taskAssignmentAPI.updateTaskAssignment(projectId, taskId, {
-        ...(editingTask.assignment || {}),
-        taskID: taskId,
-        taskName: editingTask.title,
-        projectID: projectId,
-        requiredMemberNum: editingTask.requiredMemberNum,
-        assignedMemberIds: editingTask.assignedMemberIds || [],
+      await schedulerAPI.manualScheduleTask(projectId, taskId, {
+        assignedMemberIds: editingTask.assignment?.assignedMemberIds || editingTask.assignedMemberIds || [],
         scheduledStartDate: draftStartDate,
         scheduledEndDate: draftEndDate,
       });
