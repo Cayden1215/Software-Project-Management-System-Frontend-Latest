@@ -337,6 +337,12 @@ export const taskAssignmentAPI = {
       body: JSON.stringify(data),
     });
   },
+
+  async removeTaskAssignment(projectId: number, taskId: number): Promise<void> {
+    return apiRequest<void>(`/api/v1/project/${projectId}/tasks/assignments/${taskId}`, {
+      method: 'DELETE',
+    });
+  },
 };
 
 // ============================================================================

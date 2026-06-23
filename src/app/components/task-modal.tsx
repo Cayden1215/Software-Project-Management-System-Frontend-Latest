@@ -90,7 +90,6 @@ export function TaskModal({ task, allTasks, project, isManager, onSave, onDelete
       requiredSkills: formData.requiredSkills || [],
       skillIDs: formData.skillIDs || [],
       sprintId: formData.sprintId,
-      storyPoints: formData.storyPoints,
     };
 
     onSave(newTask);
@@ -203,25 +202,6 @@ export function TaskModal({ task, allTasks, project, isManager, onSave, onDelete
               />
               <p className="text-sm text-gray-500 mt-1">
                 Minimum number of team members needed to work on this task
-              </p>
-            </div>
-
-            {/* Story Points */}
-            <div>
-              <label className="block text-gray-700 mb-2">
-                Story Points
-              </label>
-              <input
-                type="number"
-                value={formData.storyPoints || ''}
-                onChange={(e) => setFormData({ ...formData, storyPoints: parseInt(e.target.value) || undefined })}
-                min="0"
-                placeholder="Optional Scrum estimation"
-                className="w-full px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-purple-500 focus:border-transparent"
-                disabled={!isManager}
-              />
-              <p className="text-sm text-gray-500 mt-1">
-                Fibonacci scale: 1, 2, 3, 5, 8, 13, 21...
               </p>
             </div>
 

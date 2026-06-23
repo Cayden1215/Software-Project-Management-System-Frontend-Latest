@@ -1,5 +1,5 @@
 import { type PointerEvent, useCallback, useEffect, useMemo, useState } from 'react';
-import { AlertCircle, CalendarDays, Link2, Loader2, Plus, RefreshCw } from 'lucide-react';
+import { AlertCircle, CalendarDays, Link2, Loader2, Plus, RefreshCw, Trash2 } from 'lucide-react';
 import { Project, Task } from '../App';
 import { schedulerAPI, taskAssignmentAPI, type TaskAssignmentDto } from '../services/api-client';
 import { toast } from 'sonner';
@@ -145,6 +145,7 @@ export function GanttChartView({ project, isManager, onUpdateProject }: GanttCha
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [savingTaskId, setSavingTaskId] = useState<string | null>(null);
+  const [removingTaskId, setRemovingTaskId] = useState<string | null>(null);
   const [dragState, setDragState] = useState<TimelineDragState | null>(null);
   const [lastRefresh, setLastRefresh] = useState<Date>(new Date());
   const [showAddTaskModal, setShowAddTaskModal] = useState(false);
@@ -213,8 +214,8 @@ export function GanttChartView({ project, isManager, onUpdateProject }: GanttCha
         endDate: dto.endDate,
         estimatedDuration: dto.estimatedDuration || 1,
         requiredMemberNum: dto.requiredMemberNum ?? 1,
-        dependencies: dto.dependencyIds || [],
-        sprintId: dto.sprintID,
+        dependencies: (dto.dependencyIds || []).map(String),
+        sprintId: dto.sprintID ? String(dto.sprintID) : undefined,
         storyPoints: dto.storyPoints,
       })).filter((task) => task.id);
       
@@ -235,6 +236,39 @@ export function GanttChartView({ project, isManager, onUpdateProject }: GanttCha
     fetchUnassignedTasks();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [project.id]);
+
+  const handleRemoveTaskAssignment = useCallback(
+    async (taskId: string, taskTitle: string) => {
+      const projectId = Number(project.id);
+      const taskIdNum = Number(taskId);
+
+      if (!Number.isFinite(projectId) || projectId <= 0 || !Number.isFinite(taskIdNum) || taskIdNum <= 0) {
+        toast.error('Invalid project or task ID');
+        return;
+      }
+
+      // Confirm before removing
+      const confirmed = window.confirm(
+        `Remove task assignment for "${taskTitle}" from the Gantt chart?\n\nThis will unschedule the task.`,
+      );
+      if (!confirmed) return;
+
+      setRemovingTaskId(taskId);
+
+      try {
+        await taskAssignmentAPI.removeTaskAssignment(projectId, taskIdNum);
+        toast.success(`${taskTitle} removed from Gantt chart`);
+        await refreshTasks();
+        await fetchUnassignedTasks();
+      } catch (err: any) {
+        console.error('Failed to remove task assignment:', err);
+        toast.error(err?.message || 'Failed to remove task assignment');
+      } finally {
+        setRemovingTaskId(null);
+      }
+    },
+    [project.id, refreshTasks, fetchUnassignedTasks],
+  );
 
   // Update handleAddTaskSubmit to refresh unassigned tasks after successful add
   const handleAddTaskSubmit = useCallback(async () => {
@@ -600,6 +634,22 @@ export function GanttChartView({ project, isManager, onUpdateProject }: GanttCha
                         <span title={`Depends on: ${dependencies.map((dep) => dep.title).join(', ')}`}>
                           <Link2 className="w-4 h-4 text-gray-400" />
                         </span>
+                      )}
+                      {isManager && (
+                        <button
+                          type="button"
+                          onClick={() => handleRemoveTaskAssignment(task.id, task.title)}
+                          disabled={removingTaskId === task.id}
+                          className="flex-none p-1.5 text-red-600 hover:bg-red-50 rounded-md disabled:opacity-50 transition-colors"
+                          title="Remove task assignment from Gantt chart"
+                          aria-label={`Remove ${task.title} from schedule`}
+                        >
+                          {removingTaskId === task.id ? (
+                            <Loader2 className="w-4 h-4 animate-spin" />
+                          ) : (
+                            <Trash2 className="w-4 h-4" />
+                          )}
+                        </button>
                       )}
                     </div>
                   );
