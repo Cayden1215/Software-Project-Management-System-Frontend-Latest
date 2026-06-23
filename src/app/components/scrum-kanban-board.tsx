@@ -53,7 +53,6 @@ export function ScrumKanbanBoard({ project, currentUser, isManager, onUpdateProj
       requiredMemberNum: dto.requiredMemberNum ?? 1,
       dependencies: (dto.dependencyIds || []).map((depId) => depId.toString()),
       sprintId: dto.sprintID?.toString(),
-      storyPoints: dto.storyPoints,
     }));
 
     const updatedSprints = project.sprints.map((sprint) => ({
@@ -134,7 +133,6 @@ export function ScrumKanbanBoard({ project, currentUser, isManager, onUpdateProj
         endDate: draggedTask.endDate,
         dependencyIds: draggedTask.dependencies.map((d) => parseInt(d)).filter((n) => Number.isFinite(n)),
         sprintID: draggedTask.sprintId ? parseInt(draggedTask.sprintId) : undefined,
-        storyPoints: draggedTask.storyPoints,
       };
 
       await taskAPI.updateTask(projectId, taskId, updatedTaskData);
@@ -194,7 +192,6 @@ export function ScrumKanbanBoard({ project, currentUser, isManager, onUpdateProj
         endDate: task.endDate,
         dependencyIds: task.dependencies.map((id) => parseInt(id)).filter((n) => Number.isFinite(n)),
         sprintID: task.sprintId ? parseInt(task.sprintId) : undefined,
-        storyPoints: task.storyPoints ?? 0,
       };
 
       if (editingTask) {
@@ -332,7 +329,6 @@ export function ScrumKanbanBoard({ project, currentUser, isManager, onUpdateProj
           endDate: task.endDate,
           dependencyIds: task.dependencies.map(id => parseInt(id)),
           sprintID: sprintID,
-          storyPoints: task.storyPoints ?? 0,
         };
 
         // Update task's sprint via API
@@ -433,7 +429,6 @@ export function ScrumKanbanBoard({ project, currentUser, isManager, onUpdateProj
             endDate: task.endDate,
             dependencyIds: task.dependencies.map(id => parseInt(id)),
             sprintID: null,
-            storyPoints: task.storyPoints ?? 0,
           };
 
           // Update task's sprint via API (remove from sprint)
@@ -481,18 +476,7 @@ export function ScrumKanbanBoard({ project, currentUser, isManager, onUpdateProj
       return (completedTasks / tasks.length) * 100;
     };
 
-    const calculateStoryPoints = () => {
-      if (!selectedSprint) return { total: 0, completed: 0 };
-      const tasks = project.tasks.filter(task => task.sprintId === selectedSprint.id);
-      const total = tasks.reduce((sum, task) => sum + (task.storyPoints || 0), 0);
-      const completed = tasks
-        .filter(task => task.status === 'done')
-        .reduce((sum, task) => sum + (task.storyPoints || 0), 0);
-      return { total, completed };
-    };
-
     const progress = calculateSprintProgress();
-    const storyPoints = calculateStoryPoints();
 
     // Sort backlog tasks by end date
     const sortedBacklogTasks = [...backlogTasks].sort((a, b) => {
@@ -621,10 +605,6 @@ export function ScrumKanbanBoard({ project, currentUser, isManager, onUpdateProj
                 <div>
                   <div className="text-sm text-gray-600">Progress</div>
                   <div className="text-gray-900">{progress.toFixed(0)}%</div>
-                </div>
-                <div>
-                  <div className="text-sm text-gray-600">Story Points</div>
-                  <div className="text-gray-900">{storyPoints.completed} / {storyPoints.total}</div>
                 </div>
                 <div>
                   <div className="text-sm text-gray-600">Tasks</div>
@@ -800,11 +780,6 @@ export function ScrumKanbanBoard({ project, currentUser, isManager, onUpdateProj
           </div>
 
           <div className="flex items-center gap-2 flex-wrap mt-3">
-            {task.storyPoints !== undefined && (
-              <span className="px-2 py-1 bg-purple-100 text-purple-700 rounded text-xs">
-                {task.storyPoints} pts
-              </span>
-            )}
 
             {task.estimatedDuration && (
               <span className="flex items-center gap-1 text-xs text-gray-600">
@@ -1055,11 +1030,6 @@ export function ScrumKanbanBoard({ project, currentUser, isManager, onUpdateProj
                         <span className={`px-2 py-1 rounded text-xs ${getStatusColor(task.status)}`}>
                           {getStatusLabel(task.status)}
                         </span>
-                        {task.storyPoints !== undefined && (
-                          <span className="px-2 py-1 bg-purple-100 text-purple-700 rounded text-xs">
-                            {task.storyPoints} pts
-                          </span>
-                        )}
                       </div>
 
                       {task.description && (

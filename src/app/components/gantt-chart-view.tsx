@@ -1,7 +1,7 @@
 import { type PointerEvent, useCallback, useEffect, useMemo, useState } from 'react';
-import { AlertCircle, CalendarDays, Link2, Loader2, Plus, RefreshCw, Trash2 } from 'lucide-react';
+import { AlertCircle, CalendarDays, Edit2, Link2, Loader2, Plus, RefreshCw, Trash2, X } from 'lucide-react';
 import { Project, Task } from '../App';
-import { schedulerAPI, taskAssignmentAPI, type TaskAssignmentDto } from '../services/api-client';
+import { projectAPI, schedulerAPI, taskAssignmentAPI, type TaskAssignmentDto } from '../services/api-client';
 import { toast } from 'sonner';
 import {
   Dialog,
@@ -25,6 +25,12 @@ interface GanttChartViewProps {
   project: Project;
   isManager: boolean;
   onUpdateProject: (project: Project) => void;
+}
+
+interface SchedulableTeamMember {
+  userId: number;
+  name: string;
+  email: string;
 }
 
 type TimelineTask = Task & {
@@ -153,12 +159,35 @@ export function GanttChartView({ project, isManager, onUpdateProject }: GanttCha
   const [unassignedTasks, setUnassignedTasks] = useState<Task[]>([]);
   const [unassignedTasksLoading, setUnassignedTasksLoading] = useState(false);
   const [unassignedTasksError, setUnassignedTasksError] = useState<string | null>(null);
+  const [teamMembers, setTeamMembers] = useState<SchedulableTeamMember[]>([]);
+  const [editingTaskDates, setEditingTaskDates] = useState<Task | null>(null);
   const [addTaskFormData, setAddTaskFormData] = useState({
     selectedTaskId: '',
     startDate: '',
     endDate: '',
     assignedMemberIds: [] as number[],
   });
+
+  const refreshTeamMembers = useCallback(async () => {
+    const projectId = Number(project.id);
+    if (!Number.isFinite(projectId) || projectId <= 0) return;
+
+    try {
+      const members = await projectAPI.getProjectTeamMembers(projectId);
+      setTeamMembers(
+        members
+          .filter((member) => typeof member.teamMemberID === 'number')
+          .map((member) => ({
+            userId: member.teamMemberID as number,
+            name: member.teamMemberUsername || member.teamMemberEmail || `User ${member.teamMemberID}`,
+            email: member.teamMemberEmail || '',
+          })),
+      );
+    } catch (err) {
+      console.error('Failed to load team members for scheduling:', err);
+      setTeamMembers([]);
+    }
+  }, [project.id]);
 
   const refreshTasks = useCallback(async () => {
     const projectId = Number(project.id);
@@ -234,6 +263,7 @@ export function GanttChartView({ project, isManager, onUpdateProject }: GanttCha
   useEffect(() => {
     refreshTasks();
     fetchUnassignedTasks();
+    refreshTeamMembers();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [project.id]);
 
@@ -636,20 +666,31 @@ export function GanttChartView({ project, isManager, onUpdateProject }: GanttCha
                         </span>
                       )}
                       {isManager && (
-                        <button
-                          type="button"
-                          onClick={() => handleRemoveTaskAssignment(task.id, task.title)}
-                          disabled={removingTaskId === task.id}
-                          className="flex-none p-1.5 text-red-600 hover:bg-red-50 rounded-md disabled:opacity-50 transition-colors"
-                          title="Remove task assignment from Gantt chart"
-                          aria-label={`Remove ${task.title} from schedule`}
-                        >
-                          {removingTaskId === task.id ? (
-                            <Loader2 className="w-4 h-4 animate-spin" />
-                          ) : (
-                            <Trash2 className="w-4 h-4" />
-                          )}
-                        </button>
+                        <div className="flex items-center gap-1">
+                          <button
+                            type="button"
+                            onClick={() => setEditingTaskDates(task as any)}
+                            className="flex-none p-1.5 text-blue-600 hover:bg-blue-50 rounded-md transition-colors"
+                            title="Edit task dates and assignments"
+                            aria-label={`Edit ${task.title}`}
+                          >
+                            <Edit2 className="w-4 h-4" />
+                          </button>
+                          <button
+                            type="button"
+                            onClick={() => handleRemoveTaskAssignment(task.id, task.title)}
+                            disabled={removingTaskId === task.id}
+                            className="flex-none p-1.5 text-red-600 hover:bg-red-50 rounded-md disabled:opacity-50 transition-colors"
+                            title="Remove task assignment from Gantt chart"
+                            aria-label={`Remove ${task.title} from schedule`}
+                          >
+                            {removingTaskId === task.id ? (
+                              <Loader2 className="w-4 h-4 animate-spin" />
+                            ) : (
+                              <Trash2 className="w-4 h-4" />
+                            )}
+                          </button>
+                        </div>
                       )}
                     </div>
                   );
@@ -894,6 +935,176 @@ export function GanttChartView({ project, isManager, onUpdateProject }: GanttCha
         </DialogContent>
       </Dialog>
 
+      {/* Edit Task Dates Modal */}
+      {editingTaskDates && (
+        <EditGanttTaskModal
+          task={editingTaskDates}
+          teamMembers={teamMembers}
+          onSave={saveTimelineRange}
+          onClose={() => setEditingTaskDates(null)}
+          isSaving={savingTaskId === editingTaskDates.id}
+        />
+      )}
+    </div>
+  );
+}
+
+interface EditGanttTaskModalProps {
+  task: Task;
+  teamMembers: SchedulableTeamMember[];
+  onSave: (taskId: string, taskTitle: string, startDate: Date, endDate: Date, assignedMemberIds: number[]) => Promise<void>;
+  onClose: () => void;
+  isSaving?: boolean;
+}
+
+function EditGanttTaskModal({ task, teamMembers, onSave, onClose, isSaving }: EditGanttTaskModalProps) {
+  const toDateInputValue = (value?: string | Date) => {
+    if (!value) return '';
+    if (value instanceof Date) return value.toISOString().split('T')[0] || '';
+    return value;
+  };
+
+  const [startDate, setStartDate] = useState<string>(toDateInputValue(task.startDate));
+  const [endDate, setEndDate] = useState<string>(toDateInputValue(task.endDate));
+  const [selectedMemberIds, setSelectedMemberIds] = useState<number[]>(task.assignedMemberIds || []);
+  const [submitting, setSubmitting] = useState(false);
+
+  const handleSubmit = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (startDate) {
+      const start = new Date(startDate);
+      const end = endDate ? new Date(endDate) : null;
+      if (!end || end >= start) {
+        if (selectedMemberIds.length === 0) {
+          alert('Select at least one team member');
+          return;
+        }
+        if (submitting || isSaving) return;
+        try {
+          setSubmitting(true);
+          await onSave(task.id, task.title, start, end || start, selectedMemberIds);
+          onClose();
+        } finally {
+          setSubmitting(false);
+        }
+      } else {
+        alert('End date must be after start date');
+      }
+    }
+  };
+
+  const calculateDuration = () => {
+    if (startDate && endDate) {
+      const start = new Date(startDate);
+      const end = new Date(endDate);
+      const duration = Math.ceil((end.getTime() - start.getTime()) / (1000 * 60 * 60 * 24));
+      return Math.max(1, duration);
+    }
+    return task.estimatedDuration;
+  };
+
+  const toggleMember = (memberId: number) => {
+    setSelectedMemberIds((current) =>
+      current.includes(memberId) ? current.filter((id) => id !== memberId) : [...current, memberId],
+    );
+  };
+
+  return (
+    <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center p-4 z-50">
+      <div className="bg-white rounded-lg max-w-md w-full">
+        <div className="p-6 border-b border-gray-200 flex items-center justify-between">
+          <h3 className="text-gray-900">Edit Task Dates</h3>
+          <button
+            onClick={onClose}
+            className="p-2 hover:bg-gray-100 rounded-lg transition-colors"
+          >
+            <X className="w-5 h-5 text-gray-600" />
+          </button>
+        </div>
+
+        <form onSubmit={handleSubmit} className="p-6">
+          <div className="mb-4">
+            <div className="text-gray-900 mb-1">{task.title}</div>
+            <div className="text-sm text-gray-600">
+              Current duration: {task.estimatedDuration} days
+            </div>
+          </div>
+
+          <div className="space-y-4">
+            <div>
+              <label className="block text-gray-700 mb-2">Start Date</label>
+              <input
+                type="date"
+                value={startDate}
+                onChange={(e) => setStartDate(e.target.value)}
+                className="w-full px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent"
+                required
+              />
+            </div>
+
+            <div>
+              <label className="block text-gray-700 mb-2">End Date</label>
+              <input
+                type="date"
+                value={endDate}
+                onChange={(e) => setEndDate(e.target.value)}
+                min={startDate}
+                className="w-full px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent"
+              />
+            </div>
+
+            <div>
+              <label className="block text-gray-700 mb-2">Assigned Team Members</label>
+              {teamMembers.length === 0 ? (
+                <div className="p-3 bg-yellow-50 text-yellow-700 rounded-lg text-sm">
+                  No enrolled team members are available for scheduling.
+                </div>
+              ) : (
+                <div className="space-y-2 max-h-48 overflow-y-auto">
+                  {teamMembers.map((member) => (
+                    <label key={member.userId} className="flex items-start gap-2 p-3 border border-gray-200 rounded-lg hover:bg-gray-50">
+                      <input
+                        type="checkbox"
+                        checked={selectedMemberIds.includes(member.userId)}
+                        onChange={() => toggleMember(member.userId)}
+                        className="mt-1"
+                      />
+                      <span>
+                        <span className="block text-sm text-gray-900">{member.name}</span>
+                        {member.email && <span className="block text-xs text-gray-500">{member.email}</span>}
+                      </span>
+                    </label>
+                  ))}
+                </div>
+              )}
+            </div>
+
+            {startDate && endDate && (
+              <div className="p-3 bg-blue-50 rounded-lg text-sm text-blue-700">
+                New duration: {calculateDuration()} days
+              </div>
+            )}
+          </div>
+
+          <div className="flex items-center justify-end gap-2 mt-6 pt-6 border-t border-gray-200">
+            <button
+              type="button"
+              onClick={onClose}
+              className="px-4 py-2 text-gray-700 hover:bg-gray-100 rounded-lg transition-colors"
+            >
+              Cancel
+            </button>
+            <button
+              type="submit"
+              disabled={selectedMemberIds.length === 0 || submitting || Boolean(isSaving)}
+              className="px-4 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700 transition-colors disabled:opacity-50 disabled:cursor-not-allowed flex items-center gap-2"
+            >
+              {(submitting || isSaving) && <Loader2 className="w-4 h-4 animate-spin" />}
+              Save Changes
+            </button>
+          </div>
+        </form>
+      </div>
     </div>
   );
 }

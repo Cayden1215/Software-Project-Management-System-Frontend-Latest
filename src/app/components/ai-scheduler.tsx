@@ -173,11 +173,7 @@ export function AIScheduler({ project, onScheduleComplete, onClose }: AISchedule
                     ) : (
                       <span className="px-2 py-1 bg-yellow-50 text-yellow-700 rounded text-xs">Unassigned</span>
                     )}
-                    {(assignment.assignedMemberIds || []).map((memberId) => (
-                      <span key={`member-id-${memberId}`} className="px-2 py-1 bg-gray-50 text-gray-500 rounded text-xs">
-                        ID {memberId}
-                      </span>
-                    ))}
+                    
                   </div>
                 </div>
               ))}

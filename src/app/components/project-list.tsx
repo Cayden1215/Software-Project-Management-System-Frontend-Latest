@@ -88,7 +88,7 @@ export function ProjectList({
       <div className="max-w-7xl mx-auto">
         <div className="mb-8 flex items-center justify-between">
           <div>
-            <h1 className="text-gray-900 mb-2">Project Management System</h1>
+            <img src="src/assets/logo.png" alt="Logo" height="64" width="64" />
             <p className="text-gray-600">
               Welcome, {currentUser.name}
               <span className={`ml-2 px-3 py-1 rounded-full text-sm ${
